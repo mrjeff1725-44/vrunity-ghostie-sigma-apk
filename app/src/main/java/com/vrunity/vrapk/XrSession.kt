@@ -61,14 +61,18 @@ class XrSession(private val activity: Activity) {
 
     private fun loop(game: Game): Int {
         var submitted = 0
+        val startedNs = System.nanoTime()
         while (!activity.isFinishing && !activity.isDestroyed) {
             val status = Xr.poll(viewData)
             if (status < 0) {
                 check(submitted > 0) { "The headset ended VR before the first frame." }
                 return submitted
             }
-            // Empty frames are normal during a lifecycle transition. The activity
-            // separately watches startup without racing this thread's XR ownership.
+            // A session that never reaches the point of handing over a frame would
+            // otherwise leave the headset on its launch screen for ever, so startup
+            // is given a limit and the game falls back to the screen afterwards.
+            if (submitted == 0 && (System.nanoTime() - startedNs) / 1000000000L > 25L) return 0
+            // Empty frames are normal while the session is being set up.
             if (status == 0) continue
             val now = System.nanoTime()
             var dt = (now - lastNs) / 1000000000f

@@ -18,6 +18,7 @@ class VrSurfaceView(context: Context) : GLSurfaceView(context), SensorEventListe
     private var lastX = 0f
     private var lastY = 0f
     private var dragging = false
+    private var registered = false
 
     init {
         setEGLContextClientVersion(2)
@@ -26,12 +27,18 @@ class VrSurfaceView(context: Context) : GLSurfaceView(context), SensorEventListe
     }
 
     fun startSensors() {
+        if (registered) return
         val sensor = rotationSensor
-        if (sensor != null) sensors.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+        if (sensor != null) {
+            sensors.registerListener(this, sensor, SensorManager.SENSOR_DELAY_GAME)
+            registered = true
+        }
     }
 
     fun stopSensors() {
+        if (!registered) return
         sensors.unregisterListener(this)
+        registered = false
     }
 
     fun walk(dir: Float) { renderer.walkBy(dir) }
