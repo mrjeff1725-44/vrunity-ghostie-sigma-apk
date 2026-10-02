@@ -5,19 +5,14 @@ plugins {
 android {
     namespace 'com.vrunity.vrapk'
     compileSdk 34
-    ndkVersion System.getenv('VRUNITY_NDK_VERSION') ?: '27.3.13750724'
+    ndkVersion '26.1.10909125'
     defaultConfig {
         applicationId 'com.vrunity.vrapk'
         minSdk 29
         targetSdk 34
-        versionCode 1790959092
-        versionName '1.289'
+        versionCode 1790959708
+        versionName '1.708'
         ndk { abiFilters 'arm64-v8a' }
-    }
-    signingConfigs {
-        debug {
-            storeFile file(System.getenv('RUNNER_TEMP') ? System.getenv('RUNNER_TEMP') + '/.android/debug.keystore' : System.getProperty('user.home') + '/.android/debug.keystore')
-        }
     }
     buildTypes {
         release { minifyEnabled false }
@@ -32,7 +27,6 @@ android {
     externalNativeBuild {
         cmake {
             path 'src/main/cpp/CMakeLists.txt'
-            version System.getenv('VRUNITY_CMAKE_VERSION') ?: '3.31.5'
         }
     }
 }

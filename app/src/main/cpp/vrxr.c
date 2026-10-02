@@ -730,7 +730,7 @@ JNIEXPORT void JNICALL Java_com_vrunity_vrapk_Xr_markStartupStage(JNIEnv *env, j
 
 JNIEXPORT jstring JNICALL Java_com_vrunity_vrapk_Xr_startupDetail(JNIEnv *env, jobject thiz) {
     const char *stages[] = {
-        "Starting native VR engine", "Initializing Android VR loader",
+        "Waiting for resumed native headset window", "Initializing Android VR loader",
         "Creating OpenXR instance", "Finding headset system", "Creating graphics context",
         "Opening headset session", "Creating eye swapchains", "Waiting for session READY",
         "Waiting for first headset frame", "Waiting for valid tracking",

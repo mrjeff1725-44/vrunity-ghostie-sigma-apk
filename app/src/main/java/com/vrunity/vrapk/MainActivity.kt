@@ -34,7 +34,7 @@ class MainActivity : NativeActivity() {
             super.onCreate(savedInstanceState)
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             fullscreen()
-            if (previousFailure != null) Log.e("VRUnityXR", "Previous launch: " + previousFailure)
+            if (previousFailure != null) { reportFailure(previousFailure); return }
             Xr.load()
         } catch (t: Throwable) {
             reportFailure(t.toString())
@@ -44,10 +44,10 @@ class MainActivity : NativeActivity() {
         handler.postDelayed(startupWatch, 1000L)
         Thread({
             try {
+                while (!closing && !isDestroyed && !Xr.nativeWindowReady()) SystemClock.sleep(20L)
                 if (closing || isDestroyed) return@Thread
-                // OpenXR uses our pbuffer, not the Android window. Create the
-                // session BEFORE waiting for Android surface/resume callbacks,
-                // matching hello_xr: those callbacks can depend on VR starting.
+                // Always attempt OpenXR. Android's optional headtracking feature
+                // is not a reliable gate for deciding whether to start the engine.
                 val result = XrSession(this).run(::reportFailure)
                 if (result == 0 && !packageManager.hasSystemFeature("android.hardware.vr.headtracking") &&
                     !android.os.Build.MANUFACTURER.equals("Oculus", true) &&
