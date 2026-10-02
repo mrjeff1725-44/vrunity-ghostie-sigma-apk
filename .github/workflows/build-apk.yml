@@ -44,10 +44,10 @@ jobs:
           XDG_CONFIG_HOME: ${{ runner.temp }}
         run: gradle assembleDebug --no-daemon
       - name: Name the finished APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/Untitled-Project.apk"
+        run: cp app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/Ghostie-sigma.apk"
       - name: Publish the APK
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-${{ github.run_id }}
           name: VR game build ${{ github.run_id }}
-          files: app/build/outputs/apk/debug/Untitled-Project.apk
+          files: app/build/outputs/apk/debug/Ghostie-sigma.apk

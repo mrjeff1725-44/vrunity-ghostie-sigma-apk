@@ -133,7 +133,11 @@ static int createInstance(JNIEnv *env, jobject activity) {
     XrInstanceCreateInfo ci;
     memset(&ci, 0, sizeof(ci));
     ci.type = XR_TYPE_INSTANCE_CREATE_INFO;
-    ci.next = &androidInfo;
+    // The activity/VM struct is only chained in when the runtime advertises the
+    // Android extension. Chaining a struct for an extension that was never enabled is
+    // a validation error, and xrCreateInstance failing here is enough on its own to
+    // leave the app sitting on its launch screen with nothing ever drawn.
+    ci.next = hasAndroid ? &androidInfo : NULL;
     strcpy(ci.applicationInfo.applicationName, "VRUnity");
     ci.applicationInfo.applicationVersion = 1;
     strcpy(ci.applicationInfo.engineName, "VRUnity");
@@ -232,12 +236,28 @@ static int createSession(void) {
     gSwapH = (int32_t)views[0].recommendedImageRectHeight;
     if (gSwapW < 1 || gSwapH < 1) return 0;
 
+    // The eye images are drawn into and then handed to the compositor, never sampled
+    // by a shader, so a colour attachment is all the runtime is asked for. The format
+    // comes from what this runtime actually offers: a hard-coded format a headset does
+    // not support fails xrCreateSwapchain, and a session that never opens is exactly
+    // what leaves the headset sitting on its loading screen.
+    uint32_t fmtCount = 0;
+    if (XR_FAILED(xrEnumerateSwapchainFormats(gSession, 0, &fmtCount, NULL))) return 0;
+    if (fmtCount == 0) return 0;
+    if (fmtCount > 32) fmtCount = 32;
+    int64_t formats[32];
+    if (XR_FAILED(xrEnumerateSwapchainFormats(gSession, fmtCount, &fmtCount, formats))) return 0;
+    int64_t swapFormat = formats[0];
+    for (uint32_t i = 0; i < fmtCount; i++) {
+        if (formats[i] == GL_RGBA8) { swapFormat = formats[i]; break; }
+    }
+
     for (int e = 0; e < MAX_EYES; e++) {
         XrSwapchainCreateInfo info;
         memset(&info, 0, sizeof(info));
         info.type = XR_TYPE_SWAPCHAIN_CREATE_INFO;
-        info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
-        info.format = GL_RGBA8;
+        info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT;
+        info.format = swapFormat;
         info.sampleCount = 1;
         info.width = gSwapW;
         info.height = gSwapH;
@@ -502,18 +522,23 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_poll(JNIEnv *env, jobject thiz,
         ai.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
         uint32_t idx = 0;
         if (XR_FAILED(xrAcquireSwapchainImage(gSwap[e], &ai, &idx))) {
+            // One missed image is not the end of the session. Ending it here drops the
+            // app back to a screen view a headset never shows, so the frame goes out
+            // empty instead and the next one is tried normally.
             releaseImages();
             endFrameWith(0);
-            return -1;
+            return 0;
         }
         XrSwapchainImageWaitInfo wi;
         memset(&wi, 0, sizeof(wi));
         wi.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
         wi.timeout = XR_INFINITE_DURATION;
         if (XR_FAILED(xrWaitSwapchainImage(gSwap[e], &wi))) {
+            // Same again: keep the session alive and hand the compositor an empty
+            // frame rather than tearing VR down over one unusable image.
             releaseImages();
             endFrameWith(0);
-            return -1;
+            return 0;
         }
         gSwapIndex[e] = idx;
         gAcquired = e + 1;

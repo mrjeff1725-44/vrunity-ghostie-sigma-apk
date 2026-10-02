@@ -42,7 +42,7 @@ class XrSession(private val activity: Activity) {
     // 0 = there is no VR runtime here and the screen mode should be used instead.
     fun run(): Int {
         if (!Xr.start(activity)) return 0
-        var frames = 0
+        var submitted = 0
         try {
             val game = Game(activity)
             game.setup()
@@ -50,31 +50,31 @@ class XrSession(private val activity: Activity) {
             playerZ = game.startZ
             playerYaw = game.startYaw
             lastNs = System.nanoTime()
-            frames = loop(game)
+            submitted = loop(game)
         } catch (t: Throwable) {
             // Anything that fails while the headset is being opened — the scene, a
             // shader, a pose — leaves the game on the screen view rather than hanging
             // on a frame that will never be drawn.
-            frames = 0
+            submitted = 0
         } finally {
             Xr.stop()
         }
-        return if (frames > 0) 2 else 1
+        return if (submitted > 0) 2 else 1
     }
 
     private fun loop(game: Game): Int {
-        var frames = 0
-        val began = System.nanoTime()
+        var submitted = 0
         while (true) {
             val status = Xr.poll(viewData)
-            if (status < 0) return frames
-            if (status == 0) {
-                // Give the runtime a few seconds for the first frame. If it never
-                // comes, the screen view is a better answer than a blank headset.
-                if (frames == 0 && System.nanoTime() - began > 6000000000L) return 0
-                Thread.sleep(6)
-                continue
-            }
+            if (status < 0) return submitted
+            // 0 means the runtime has a frame for us but has nothing for us to draw
+            // yet: the headset is still opening the app, or nobody is wearing it. That
+            // is the ordinary start of a VR session, not a failure — keep answering
+            // with frames and keep waiting, for as long as it takes. Giving up here
+            // after a few seconds is exactly what left the headset on its loading
+            // screen: the app dropped to a screen view a headset never shows, and the
+            // runtime was left waiting for a frame that never came.
+            if (status == 0) continue
             val now = System.nanoTime()
             var dt = (now - lastNs) / 1000000000f
             lastNs = now
@@ -82,8 +82,8 @@ class XrSession(private val activity: Activity) {
             Xr.input(stick)
             steer(dt)
             drawEyes(game)
-            frames++
-            if (Xr.endFrame() < 0) return frames
+            submitted++
+            if (Xr.endFrame() < 0) return submitted
         }
     }
 

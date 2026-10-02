@@ -23,13 +23,15 @@ class MainActivity : Activity() {
             // 2 = the headset ran the game, anything else leaves the scene on screen.
             // Nothing this thread can do is allowed to end in a blank window, so every
             // failure — including one this thread never sees coming — is caught here.
-            var tookVr = false
+            // The activity is deliberately NOT finished when VR takes over. From that
+            // point the headset's own session owns the display, and finishing the
+            // activity here tears that very session down again the moment it starts —
+            // which is what dropped the app straight back to its launch screen.
             try {
-                tookVr = XrSession(this).run() == 2
+                XrSession(this).run()
             } catch (t: Throwable) {
-                tookVr = false
+                // Whatever went wrong, the window never goes blank: screen mode stays.
             }
-            if (tookVr) runOnUiThread { finish() }
         }
         attempt.start()
     }
