@@ -19,7 +19,9 @@ object Audio {
         for (sound in list) {
             try {
                 val player = MediaPlayer()
-                val file = context.assets.openFd(sound.file)
+                // The sounds travel in the app's own media folder, beside its models
+                // and images.
+                val file = context.assets.openFd("media/" + sound.file)
                 player.setDataSource(file.fileDescriptor, file.startOffset, file.length)
                 file.close()
                 player.isLooping = sound.loop

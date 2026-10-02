@@ -1,6 +1,7 @@
 package com.vrunity.vrapk
 
 import android.content.Context
+import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.Matrix
 
@@ -35,6 +36,11 @@ class Game(context: Context) : LogicWorld {
     private var uTex = 0
     private var uUseTex = 0
     private var uUvRepeat = 0
+    // The clip a video surface shows, and the matrix that lays each of its frames onto
+    // the surface the way the clip is stored.
+    private var uClip = 0
+    private var uUseClip = 0
+    private var uTexM = 0
     private var uSunDir0 = 0
     private var uSunColor0 = 0
     private var uSunDir1 = 0
@@ -76,6 +82,15 @@ class Game(context: Context) : LogicWorld {
         }
         for (item in scene.items) {
             loadTexture(item.tex)
+        }
+        // The clips the scene shows: the device plays them itself, straight onto the
+        // surface each belongs to. A clip it cannot play leaves the still frame there,
+        // so the surface is never blank.
+        for (item in scene.items) {
+            if (item.video.isEmpty()) continue
+            val clip = Video(item.video)
+            clip.open(context, item.vsound[0] < 0.5f, item.vsound[1], item.vsound[2], item.vsound[3])
+            if (clip.playing) item.clip = clip
         }
         for (model in models.values) {
             for (part in model.parts) loadTexture(part.image)
@@ -128,18 +143,22 @@ class Game(context: Context) : LogicWorld {
     }
 
     private fun buildProgram() {
-        val vertex = "uniform mat4 uMvp;attribute vec3 aPos;attribute vec3 aNormal;attribute vec2 aUv;" +
-            "varying vec3 vN;varying vec2 vUv;varying float vDepth;" +
-            "void main(){vN=aNormal;vUv=aUv;vec4 cp=uMvp*vec4(aPos,1.0);vDepth=cp.w;gl_Position=cp;}"
+        val vertex = "uniform mat4 uMvp;uniform mat4 uTexM;attribute vec3 aPos;attribute vec3 aNormal;attribute vec2 aUv;" +
+            "varying vec3 vN;varying vec2 vUv;varying vec2 vClip;varying float vDepth;" +
+            "void main(){vN=aNormal;vUv=aUv;vClip=(uTexM*vec4(aUv,0.0,1.0)).xy;vec4 cp=uMvp*vec4(aPos,1.0);vDepth=cp.w;gl_Position=cp;}"
         // Lit the way the editor lights it: the scene's own lights brought into this
         // object's frame, the scene's fill light, the same filmic curve the editor
         // renders through, and the scene's fog on top.
         // Texture coordinates arrive with the image's top row first, so the picture
         // is sampled as it is. An image is sRGB, and the lighting here is linear, so
         // it is brought into the same space the editor renders it in.
-        val fragment = "precision mediump float;varying vec3 vN;varying vec2 vUv;varying float vDepth;" +
+        // A surface shows either its own image or a clip playing on it. The clip's
+        // frames arrive through the device's video image, so both are sampled here and
+        // whichever one the surface has is the one it draws.
+        val fragment = "#extension GL_OES_EGL_image_external : require\n" +
+            "precision mediump float;varying vec3 vN;varying vec2 vUv;varying vec2 vClip;varying float vDepth;" +
             "uniform vec3 uColor;uniform mat3 uRot;uniform float uAlpha;" +
-            "uniform sampler2D uTex;uniform float uUseTex;uniform vec2 uUvRepeat;" +
+            "uniform sampler2D uTex;uniform samplerExternalOES uClip;uniform float uUseTex;uniform float uUseClip;uniform vec2 uUvRepeat;" +
             "uniform vec3 uSunDir0;uniform vec3 uSunColor0;uniform vec3 uSunDir1;uniform vec3 uSunColor1;" +
             "uniform vec3 uAmbSky;uniform vec3 uAmbGround;uniform vec3 uFogColor;uniform vec2 uFogRange;uniform float uFogOn;" +
             "vec3 aces(vec3 c){c*=1.1/0.6;" +
@@ -147,9 +166,10 @@ class Game(context: Context) : LogicWorld {
             "mat3 outM=mat3(vec3(1.60475,-0.10208,-0.00327),vec3(-0.53108,1.10813,-0.07276),vec3(-0.07367,-0.00605,1.07602));" +
             "vec3 v=inM*c;vec3 num=v*(v+0.0245786)-0.000090537;vec3 den=v*(0.983729*v+0.4329510)+0.238081;" +
             "return clamp(outM*(num/den),0.0,1.0);}" +
-            "void main(){vec4 tx=texture2D(uTex,vUv*uUvRepeat);" +
-            "vec3 albedo=uColor*mix(vec3(1.0),pow(tx.rgb,vec3(2.2)),uUseTex);" +
-            "float alpha=uAlpha*mix(1.0,tx.a,uUseTex);" +
+            "void main(){vec4 tx=mix(texture2D(uTex,vUv*uUvRepeat),texture2D(uClip,vClip),uUseClip);" +
+            "float use=max(uUseTex,uUseClip);" +
+            "vec3 albedo=uColor*mix(vec3(1.0),pow(tx.rgb,vec3(2.2)),use);" +
+            "float alpha=uAlpha*mix(1.0,tx.a,use);" +
             "vec3 n=normalize(vN);" +
             "vec3 l0=normalize(uSunDir0*uRot);vec3 l1=normalize(uSunDir1*uRot);" +
             "vec3 irr=uSunColor0*max(dot(n,l0),0.0)+uSunColor1*max(dot(n,l1),0.0);" +
@@ -178,6 +198,9 @@ class Game(context: Context) : LogicWorld {
         uTex = GLES20.glGetUniformLocation(program, "uTex")
         uUseTex = GLES20.glGetUniformLocation(program, "uUseTex")
         uUvRepeat = GLES20.glGetUniformLocation(program, "uUvRepeat")
+        uClip = GLES20.glGetUniformLocation(program, "uClip")
+        uUseClip = GLES20.glGetUniformLocation(program, "uUseClip")
+        uTexM = GLES20.glGetUniformLocation(program, "uTexM")
         uSunDir0 = GLES20.glGetUniformLocation(program, "uSunDir0")
         uSunColor0 = GLES20.glGetUniformLocation(program, "uSunColor0")
         uSunDir1 = GLES20.glGetUniformLocation(program, "uSunDir1")
@@ -267,6 +290,11 @@ class Game(context: Context) : LogicWorld {
     // The scene's sounds stop with the game.
     fun stopAudio() {
         Audio.stop()
+        // The clips stop with the session, the same as the scene's sounds.
+        for (item in scene.items) {
+            item.clip?.stop()
+            item.clip = null
+        }
     }
 
     // Where a teleport action asked the player to stand, handed to the caller after
@@ -376,6 +404,9 @@ class Game(context: Context) : LogicWorld {
         GLES20.glUseProgram(program)
         GLES20.glEnable(GLES20.GL_DEPTH_TEST)
         GLES20.glDepthFunc(GLES20.GL_LEQUAL)
+        // A surface's own image lives on one unit, a clip's frames on the next.
+        GLES20.glUniform1i(uTex, 0)
+        GLES20.glUniform1i(uClip, 1)
         drawItems(view, proj, false)
         drawItems(view, proj, true)
     }
@@ -399,6 +430,19 @@ class Game(context: Context) : LogicWorld {
             GLES20.glUniformMatrix4fv(uMvp, 1, false, mvp, 0)
             GLES20.glUniformMatrix3fv(uRot, 1, false, item.rotM, 0)
             GLES20.glUniform2f(uUvRepeat, item.uv, item.uv)
+            // A surface with a clip draws the clip's newest frame; every other surface
+            // draws the image it came with.
+            val clip = item.clip
+            if (clip != null) {
+                clip.update()
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+                GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, clip.texture)
+                GLES20.glUniform1f(uUseClip, 1f)
+                GLES20.glUniformMatrix4fv(uTexM, 1, false, clip.transform(), 0)
+                GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+            } else {
+                GLES20.glUniform1f(uUseClip, 0f)
+            }
             val model = if (item.model.isEmpty()) null else models[item.model]
             if (model != null) {
                 // A model is drawn from both sides, exactly as the editor draws it.

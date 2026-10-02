@@ -64,6 +64,10 @@ class Scene private constructor() {
         val shape: String,
         val model: String,
         val tex: String,
+        // A clip the surface shows instead of its image, and what that clip does:
+        // whether its own sound is heard, and how loud, fast and high it runs.
+        val video: String,
+        val vsound: FloatArray,
         val uv: Float,
         // The see-through flag and the opacity belong to the scene, and a trigger can
         // change both while the scene runs.
@@ -78,6 +82,9 @@ class Scene private constructor() {
     ) {
         val matrix = FloatArray(16)
         val rotM = FloatArray(9)
+        // The clip this surface plays, once the device has opened it. Until then the
+        // surface shows the still frame the scene was built with.
+        var clip: Video? = null
     }
 
     // An object the scene animates: one position, rotation and scale per keyframe,
@@ -124,6 +131,8 @@ class Scene private constructor() {
                     shape,
                     modelFile,
                     o.optString("tex", ""),
+                    o.optString("video", ""),
+                    vec(o.optJSONArray("vsound"), floatArrayOf(0f, 1f, 1f, 1f)),
                     o.optDouble("uv", 1.0).toFloat(),
                     o.optBoolean("blend", false),
                     vec(o.optJSONArray("pos"), floatArrayOf(0f, 0f, 0f)),
