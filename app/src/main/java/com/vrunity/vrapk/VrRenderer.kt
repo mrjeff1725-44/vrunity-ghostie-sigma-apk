@@ -165,6 +165,10 @@ class VrRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     override fun onDrawFrame(gl: GL10?) {
         val half = width / 2
+        // The scene moves forward once per frame, with the eye as the ear that hears
+        // it. The view still holds the last frame's, which is where the head was a
+        // moment ago.
+        game.update(eyeX, eyeY, eyeZ, view[0], view[2])
         game.clear()
         Matrix.perspectiveM(proj, 0, 72f, half.toFloat() / height.toFloat(), 0.05f, 600f)
         for (eye in 0 until 2) {

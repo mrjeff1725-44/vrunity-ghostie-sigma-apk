@@ -1,16 +1,21 @@
 package com.vrunity.vrapk
 
-// The game's geometry, built on the device at start-up: positions and normals in
-// one buffer, six floats per vertex.
+// The game's geometry, built on the device at start-up: positions, normals and
+// texture coordinates in one buffer, eight floats per vertex.
 class Mesh(vertices: FloatArray) {
     private val gpu = VertexBuffer(vertices)
 
-    fun draw(posHandle: Int, normHandle: Int) { gpu.draw(posHandle, normHandle) }
+    fun draw(posHandle: Int, normHandle: Int, uvHandle: Int) { gpu.draw(posHandle, normHandle, uvHandle) }
 
     companion object {
-        private fun push(v: ArrayList<Float>, p: FloatArray, n: FloatArray) {
+        // A texture coordinate. The images are uploaded with their top row first, so
+        // the top of a picture is the smaller number here.
+        private fun uv(u: Float, w: Float): FloatArray = floatArrayOf(u, w)
+
+        private fun push(v: ArrayList<Float>, p: FloatArray, n: FloatArray, uv: FloatArray) {
             v.add(p[0]); v.add(p[1]); v.add(p[2])
             v.add(n[0]); v.add(n[1]); v.add(n[2])
+            v.add(uv[0]); v.add(uv[1])
         }
 
         private fun unit(p: FloatArray): FloatArray {
@@ -19,8 +24,8 @@ class Mesh(vertices: FloatArray) {
             return floatArrayOf(p[0] / m, p[1] / m, p[2] / m)
         }
 
-        private fun tri(v: ArrayList<Float>, a: FloatArray, b: FloatArray, c: FloatArray, na: FloatArray, nb: FloatArray, nc: FloatArray) {
-            push(v, a, na); push(v, b, nb); push(v, c, nc)
+        private fun tri(v: ArrayList<Float>, a: FloatArray, b: FloatArray, c: FloatArray, na: FloatArray, nb: FloatArray, nc: FloatArray, ua: FloatArray, ub: FloatArray, uc: FloatArray) {
+            push(v, a, na, ua); push(v, b, nb, ub); push(v, c, nc, uc)
         }
 
         private fun at(c: FloatArray, a: FloatArray, sa: Float, b: FloatArray, sb: Float): FloatArray {
@@ -41,8 +46,9 @@ class Mesh(vertices: FloatArray) {
                 val p1 = at(c, u, -0.5f, w, 0.5f)
                 val p2 = at(c, u, -0.5f, w, -0.5f)
                 val p3 = at(c, u, 0.5f, w, -0.5f)
-                tri(v, p0, p1, p2, n, n, n)
-                tri(v, p0, p2, p3, n, n, n)
+                // The whole image on each face, the right way up.
+                tri(v, p0, p1, p2, n, n, n, uv(1f, 0f), uv(0f, 0f), uv(0f, 1f))
+                tri(v, p0, p2, p3, n, n, n, uv(1f, 0f), uv(0f, 1f), uv(1f, 1f))
             }
             return v.toFloatArray()
         }
@@ -72,8 +78,13 @@ class Mesh(vertices: FloatArray) {
                     val b = spherePoint(r0, s1)
                     val c = spherePoint(r1, s1)
                     val d = spherePoint(r1, s0)
-                    tri(v, a, c, b, outward(a), outward(c), outward(b))
-                    tri(v, a, d, c, outward(a), outward(d), outward(c))
+                    // Around the equator and from pole to pole.
+                    val u0 = (s0 / (2.0 * Math.PI)).toFloat()
+                    val u1 = (s1 / (2.0 * Math.PI)).toFloat()
+                    val w0 = (r0 / Math.PI).toFloat()
+                    val w1 = (r1 / Math.PI).toFloat()
+                    tri(v, a, c, b, outward(a), outward(c), outward(b), uv(u0, w0), uv(u1, w1), uv(u0, w1))
+                    tri(v, a, d, c, outward(a), outward(d), outward(c), uv(u0, w0), uv(u1, w0), uv(u1, w1))
                 }
             }
             return v.toFloatArray()
@@ -95,12 +106,14 @@ class Mesh(vertices: FloatArray) {
                 val b = floatArrayOf(x1, -0.5f, z1)
                 val c = floatArrayOf(x1, 0.5f, z1)
                 val d = floatArrayOf(x0, 0.5f, z0)
-                tri(v, a, b, c, n0, n1, n1)
-                tri(v, a, c, d, n0, n1, n0)
+                val ub = (s.toDouble() / sectors).toFloat()
+                val ue = ((s + 1).toDouble() / sectors).toFloat()
+                tri(v, a, b, c, n0, n1, n1, uv(ub, 1f), uv(ue, 1f), uv(ue, 0f))
+                tri(v, a, c, d, n0, n1, n0, uv(ub, 1f), uv(ue, 0f), uv(ub, 0f))
                 val top = floatArrayOf(0f, 1f, 0f)
                 val bottom = floatArrayOf(0f, -1f, 0f)
-                tri(v, floatArrayOf(0f, 0.5f, 0f), d, c, top, top, top)
-                tri(v, floatArrayOf(0f, -0.5f, 0f), b, a, bottom, bottom, bottom)
+                tri(v, floatArrayOf(0f, 0.5f, 0f), d, c, top, top, top, uv(0.5f, 0.5f), uv(ub, 0f), uv(ue, 0f))
+                tri(v, floatArrayOf(0f, -0.5f, 0f), b, a, bottom, bottom, bottom, uv(0.5f, 0.5f), uv(ue, 1f), uv(ub, 1f))
             }
             return v.toFloatArray()
         }
@@ -115,9 +128,11 @@ class Mesh(vertices: FloatArray) {
                 val a = floatArrayOf((0.5 * Math.cos(t0)).toFloat(), -0.5f, (0.5 * Math.sin(t0)).toFloat())
                 val b = floatArrayOf((0.5 * Math.cos(t1)).toFloat(), -0.5f, (0.5 * Math.sin(t1)).toFloat())
                 val side = unit(floatArrayOf((a[0] + b[0]) * 1.4f, 0.45f, (a[2] + b[2]) * 1.4f))
-                tri(v, a, b, apex, side, side, side)
+                val ub = (s.toDouble() / sectors).toFloat()
+                val ue = ((s + 1).toDouble() / sectors).toFloat()
+                tri(v, a, b, apex, side, side, side, uv(ub, 1f), uv(ue, 1f), uv((ub + ue) * 0.5f, 0f))
                 val bottom = floatArrayOf(0f, -1f, 0f)
-                tri(v, floatArrayOf(0f, -0.5f, 0f), b, a, bottom, bottom, bottom)
+                tri(v, floatArrayOf(0f, -0.5f, 0f), b, a, bottom, bottom, bottom, uv(0.5f, 0.5f), uv(ue, 1f), uv(ub, 1f))
             }
             return v.toFloatArray()
         }
@@ -129,8 +144,8 @@ class Mesh(vertices: FloatArray) {
             val p1 = floatArrayOf(0.5f, -0.5f, 0f)
             val p2 = floatArrayOf(0.5f, 0.5f, 0f)
             val p3 = floatArrayOf(-0.5f, 0.5f, 0f)
-            tri(v, p0, p1, p2, n, n, n)
-            tri(v, p0, p2, p3, n, n, n)
+            tri(v, p0, p1, p2, n, n, n, uv(0f, 1f), uv(1f, 1f), uv(1f, 0f))
+            tri(v, p0, p2, p3, n, n, n, uv(0f, 1f), uv(1f, 0f), uv(0f, 0f))
             return v.toFloatArray()
         }
     }

@@ -42,25 +42,29 @@ class XrSession(private val activity: Activity) {
     // 0 = there is no VR runtime here and the screen mode should be used instead.
     fun run(onFailure: (String) -> Unit): Int {
         var submitted = 0
+        var game: Game? = null
         try {
             if (!Xr.start(activity)) return 0
             Xr.markStartupStage(13)
             VrLaunchFailure.phase(activity, Xr.startupDetail())
-            val game = Game(activity)
+            val scene = Game(activity)
+            game = scene
             Xr.markStartupStage(14)
             VrLaunchFailure.phase(activity, Xr.startupDetail())
-            game.setup()
-            playerX = game.startX
-            playerZ = game.startZ
-            playerYaw = game.startYaw
+            scene.setup()
+            playerX = scene.startX
+            playerZ = scene.startZ
+            playerYaw = scene.startYaw
             lastNs = System.nanoTime()
-            submitted = loop(game)
+            submitted = loop(scene)
         } catch (t: Throwable) {
             // Report BEFORE teardown: a driver failure can block native cleanup,
             // and reporting only after finally hid the original exception.
             onFailure(t.toString() + "\n" + Xr.startupDetail())
             throw t
         } finally {
+            // The scene's sounds stop with the session, before the runtime is torn down.
+            game?.stopAudio()
             Xr.stop()
         }
         return if (submitted > 0) 2 else 1
@@ -165,6 +169,9 @@ class XrSession(private val activity: Activity) {
         // that is not floor-relative starts at the head, so the eyes are lifted to the
         // scene's own height instead of sitting on the ground.
         playerY = if (Xr.floorSpace()) 0f else game.eyeHeight
+        // The scene moves forward once per frame, with the player's head as the ear
+        // that hears it.
+        game.update(playerX, playerY + game.eyeHeight, playerZ, view[0], view[2])
         // A pose that is not a number would make the frustum degenerate and hide the
         // whole scene, so it is replaced with a sane view instead.
         for (i in 0 until 22) {

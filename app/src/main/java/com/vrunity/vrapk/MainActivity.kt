@@ -104,6 +104,9 @@ class MainActivity : NativeActivity() {
     override fun onDestroy() {
         closing = true
         handler.removeCallbacks(startupWatch)
+        // The scene's sounds stop with the game in screen mode; the headset session
+        // stops its own when it closes.
+        Audio.stop()
         super.onDestroy()
     }
     override fun onWindowFocusChanged(hasFocus: Boolean) {

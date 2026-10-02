@@ -10,6 +10,8 @@ import org.json.JSONObject
 class Scene private constructor() {
     val bg = floatArrayOf(0.06f, 0.08f, 0.14f)
     val items = ArrayList<Item>()
+    // The sounds the scene carries, each heard from where its object stands.
+    val sounds = ArrayList<Sound>()
     var startX = 0f
     var startZ = 0f
     var startYaw = 0f
@@ -39,9 +41,41 @@ class Scene private constructor() {
     var fogFar = 60f
     val fogColor = floatArrayOf(0.5f, 0.5f, 0.5f)
 
-    class Item(val shape: String, val model: FloatArray, val color: FloatArray, val rotM: FloatArray, val opacity: Float)
+    // A surface to draw: either one of the device's own shapes, or a model baked
+    // from the scene (an imported model, 3D text, a model attached to an object),
+    // which arrives already in the object's own space. The item carries its own place
+    // in the world and one matrix, which the scene's animation moves while it runs.
+    class Item(
+        val shape: String,
+        val model: String,
+        val tex: String,
+        val uv: Float,
+        val blend: Boolean,
+        val pos: FloatArray,
+        val rot: FloatArray,
+        val scale: FloatArray,
+        val color: FloatArray,
+        val opacity: Float,
+        val anim: Anim?,
+        val parent: Int,
+    ) {
+        val matrix = FloatArray(16)
+        val rotM = FloatArray(9)
+    }
+
+    // An object the scene animates: one position, rotation and scale per keyframe,
+    // evenly spaced across the duration and played at the object's own speed.
+    class Anim(val duration: Float, val speed: Float, val loop: Boolean, val kfs: FloatArray) {
+        val count = kfs.size / 9
+        var time = 0f
+    }
+
+    // A sound attached to an object: a range of zero is heard across the whole scene.
+    class Sound(val file: String, val pos: FloatArray, val range: Float, val volume: Float, val loop: Boolean, val auto: Boolean)
 
     companion object {
+
+        private val scratch = FloatArray(16)
 
         fun load(context: Context): Scene {
             val scene = Scene()
@@ -60,36 +94,85 @@ class Scene private constructor() {
             readSky(root, scene)
             readLights(root, scene)
             readFog(root, scene)
+            readSounds(root, scene)
             val list = root.optJSONArray("objects") ?: return scene
             for (i in 0 until list.length()) {
                 val o = list.optJSONObject(i) ?: continue
                 val shape = o.optString("shape", "")
-                if (shape.isEmpty()) continue
-                val p = vec(o.optJSONArray("pos"), floatArrayOf(0f, 0f, 0f))
-                val rot = vec(o.optJSONArray("rot"), floatArrayOf(0f, 0f, 0f))
-                val scl = vec(o.optJSONArray("scale"), floatArrayOf(1f, 1f, 1f))
-                val col = vec(o.optJSONArray("color"), floatArrayOf(0.5f, 0.5f, 0.5f))
-                val rotation = FloatArray(16)
-                Matrix.setIdentityM(rotation, 0)
-                Matrix.rotateM(rotation, 0, rot[0] * 57.29578f, 1f, 0f, 0f)
-                Matrix.rotateM(rotation, 0, rot[1] * 57.29578f, 0f, 1f, 0f)
-                Matrix.rotateM(rotation, 0, rot[2] * 57.29578f, 0f, 0f, 1f)
-                val placed = FloatArray(16)
-                Matrix.setIdentityM(placed, 0)
-                Matrix.translateM(placed, 0, p[0], p[1], p[2])
-                val model = FloatArray(16)
-                Matrix.multiplyMM(model, 0, placed, 0, rotation, 0)
-                Matrix.scaleM(model, 0, scl[0], scl[1], scl[2])
-                // The item's own rotation goes to the shader, which brings the scene's
-                // lights into the item's frame — so a turned object is lit on the side
-                // that faces the sun, exactly as the editor lights it.
-                val rotM = floatArrayOf(
-                    rotation[0], rotation[1], rotation[2],
-                    rotation[4], rotation[5], rotation[6],
-                    rotation[8], rotation[9], rotation[10])
-                scene.items.add(Item(shape, model, col, rotM, o.optDouble("opacity", 1.0).toFloat()))
+                val modelFile = o.optString("model", "")
+                if (shape.isEmpty() && modelFile.isEmpty()) continue
+                val item = Item(
+                    shape,
+                    modelFile,
+                    o.optString("tex", ""),
+                    o.optDouble("uv", 1.0).toFloat(),
+                    o.optBoolean("blend", false),
+                    vec(o.optJSONArray("pos"), floatArrayOf(0f, 0f, 0f)),
+                    vec(o.optJSONArray("rot"), floatArrayOf(0f, 0f, 0f)),
+                    vec(o.optJSONArray("scale"), floatArrayOf(1f, 1f, 1f)),
+                    vec(o.optJSONArray("color"), floatArrayOf(0.5f, 0.5f, 0.5f)),
+                    o.optDouble("opacity", 1.0).toFloat(),
+                    readAnim(o.optJSONObject("anim")),
+                    o.optInt("parent", -1))
+                compose(item)
+                scene.items.add(item)
             }
             return scene
+        }
+
+        // Where an item stands, in the form the shader wants it: one matrix for the
+        // geometry and one for the object's own turn, which brings the scene's lights
+        // into the item's frame — so a turned object is lit on the side that faces the
+        // sun, exactly as the editor lights it.
+        fun compose(item: Item) {
+            val rotation = FloatArray(16)
+            Matrix.setIdentityM(rotation, 0)
+            Matrix.rotateM(rotation, 0, item.rot[0] * 57.29578f, 1f, 0f, 0f)
+            Matrix.rotateM(rotation, 0, item.rot[1] * 57.29578f, 0f, 1f, 0f)
+            Matrix.rotateM(rotation, 0, item.rot[2] * 57.29578f, 0f, 0f, 1f)
+            Matrix.setIdentityM(item.matrix, 0)
+            Matrix.translateM(item.matrix, 0, item.pos[0], item.pos[1], item.pos[2])
+            Matrix.multiplyMM(scratch, 0, item.matrix, 0, rotation, 0)
+            System.arraycopy(scratch, 0, item.matrix, 0, 16)
+            Matrix.scaleM(item.matrix, 0, item.scale[0], item.scale[1], item.scale[2])
+            item.rotM[0] = rotation[0]; item.rotM[1] = rotation[1]; item.rotM[2] = rotation[2]
+            item.rotM[3] = rotation[4]; item.rotM[4] = rotation[5]; item.rotM[5] = rotation[6]
+            item.rotM[6] = rotation[8]; item.rotM[7] = rotation[9]; item.rotM[8] = rotation[10]
+        }
+
+        // The keyframes an animated object carries, flattened to nine numbers each:
+        // position, rotation and scale.
+        private fun readAnim(a: JSONObject?): Anim? {
+            if (a == null) return null
+            val frames = a.optJSONArray("kfs") ?: return null
+            if (frames.length() < 1) return null
+            val values = FloatArray(frames.length() * 9)
+            for (i in 0 until frames.length()) {
+                val frame = frames.optJSONArray(i) ?: continue
+                for (k in 0 until 9) values[i * 9 + k] = frame.optDouble(k, 0.0).toFloat()
+            }
+            val duration = a.optDouble("duration", 2.0).toFloat()
+            return Anim(
+                if (duration > 0.01f) duration else 0.01f,
+                a.optDouble("speed", 1.0).toFloat(),
+                a.optBoolean("loop", true),
+                values)
+        }
+
+        private fun readSounds(root: JSONObject, scene: Scene) {
+            val list = root.optJSONArray("sounds") ?: return
+            for (i in 0 until list.length()) {
+                val s = list.optJSONObject(i) ?: continue
+                val file = s.optString("file", "")
+                if (file.isEmpty()) continue
+                scene.sounds.add(Sound(
+                    file,
+                    vec(s.optJSONArray("pos"), floatArrayOf(0f, 0f, 0f)),
+                    s.optDouble("range", 0.0).toFloat(),
+                    s.optDouble("volume", 1.0).toFloat(),
+                    s.optBoolean("loop", true),
+                    s.optBoolean("auto", true)))
+            }
         }
 
         private fun copy3(a: JSONArray?, out: FloatArray, at: Int = 0) {

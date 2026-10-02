@@ -24,6 +24,30 @@ jobs:
           unzip -o -q -j openxr.aar 'prefab/modules/headers/include/openxr/*' -d app/src/main/cpp/openxr
           unzip -o -q -j openxr.aar 'jni/arm64-v8a/libopenxr_loader.so' -d app/src/main/jniLibs/arm64-v8a
           rm openxr.aar
+      - name: Fetch the scene's own models and images
+        run: |
+          python3 - <<'PY'
+          import base64, json, os, urllib.request
+          path = 'app/src/main/assets/media.json'
+          if not os.path.exists(path):
+              raise SystemExit(0)
+          out = 'app/src/main/assets/media'
+          os.makedirs(out, exist_ok=True)
+          for entry in json.load(open(path)):
+              target = os.path.join(out, entry['file'])
+              url = entry['url']
+              try:
+                  # A small file travels inside the list itself; anything else is
+                  # fetched from where the app put it.
+                  if url.startswith('data:'):
+                      head, data = url.split(',', 1)
+                      open(target, 'wb').write(base64.b64decode(data))
+                  else:
+                      urllib.request.urlretrieve(url, target)
+                  print('added', entry['file'])
+              except Exception as e:
+                  print('could not add', entry['file'], e)
+          PY
       - name: Point Gradle at the Android SDK
         run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
       - name: Prepare the debug signing key
