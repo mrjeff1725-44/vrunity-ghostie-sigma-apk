@@ -5,31 +5,51 @@ permissions:
   contents: write
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
-      - uses: gradle/actions/setup-gradle@v3
+      - name: Use installed Android tools
+        run: |
+          echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
+          echo "VRUNITY_NDK_VERSION=$(sed -n 's/Pkg.Revision *= *//p' "$ANDROID_NDK_HOME/source.properties")" >> "$GITHUB_ENV"
+          CMAKE_VERSION=$(ls "$ANDROID_SDK_ROOT/cmake" | grep '^3[.]' | sort -V | tail -1)
+          test -n "$CMAKE_VERSION"
+          echo "VRUNITY_CMAKE_VERSION=$CMAKE_VERSION" >> "$GITHUB_ENV"
+      - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.2'
-      - name: Install the Android NDK
-        run: echo "y" | sudo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;26.1.10909125" > /dev/null
+          cache-read-only: false
+      - name: Restore compiled project
+        uses: actions/cache@v4
+        with:
+          path: |
+            .gradle
+            app/build
+            app/.cxx
+          key: ${{ runner.os }}-vrunity-project-v1-${{ github.repository }}-${{ env.VRUNITY_NDK_VERSION }}-${{ env.VRUNITY_CMAKE_VERSION }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-vrunity-project-v1-${{ github.repository }}-${{ env.VRUNITY_NDK_VERSION }}-${{ env.VRUNITY_CMAKE_VERSION }}-
+      - name: Restore app signing key
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/.android/debug.keystore
+          key: ${{ runner.os }}-vrunity-signing-v1-${{ github.repository }}
+      - name: Prepare app signing key
+        run: |
+          mkdir -p "$RUNNER_TEMP/.android"
+          if [ ! -f "$RUNNER_TEMP/.android/debug.keystore" ]; then
+            keytool -genkeypair -keystore "$RUNNER_TEMP/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" -noprompt
+          fi
       - name: Fetch the headset VR runtime
         run: |
-          curl -sSL -o openxr.aar https://repo1.maven.org/maven2/org/khronos/openxr/openxr_loader_for_android/1.1.49/openxr_loader_for_android-1.1.49.aar
+          curl -fsSL -o openxr.aar https://repo1.maven.org/maven2/org/khronos/openxr/openxr_loader_for_android/1.1.49/openxr_loader_for_android-1.1.49.aar
           mkdir -p app/src/main/cpp/openxr app/src/main/jniLibs/arm64-v8a
           unzip -o -q -j openxr.aar 'prefab/modules/headers/include/openxr/*' -d app/src/main/cpp/openxr
           unzip -o -q -j openxr.aar 'jni/arm64-v8a/libopenxr_loader.so' -d app/src/main/jniLibs/arm64-v8a
-          rm openxr.aar
-      - name: Point Gradle at the Android SDK
-        run: echo "sdk.dir=$ANDROID_SDK_ROOT" > local.properties
-      - name: Prepare the debug signing key
-        run: |
-          mkdir -p "$RUNNER_TEMP/.android"
-          keytool -genkeypair -keystore "$RUNNER_TEMP/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" -noprompt
       - name: Use the app picture
         run: |
           mkdir -p app/src/main/res/drawable
@@ -37,14 +57,16 @@ jobs:
             echo "app picture applied"
           else
             sed -i 's/ android:icon="@drawable\/app_icon"//; s/ android:roundIcon="@drawable\/app_icon"//' app/src/main/AndroidManifest.xml
-            echo "no app picture - the build continues without one"
           fi
       - name: Build the game
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}
-        run: gradle assembleDebug --no-daemon
+        run: gradle assembleDebug --no-daemon --build-cache --parallel
       - name: Name the finished APK
-        run: cp app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/Ghostie-sigma.apk"
+        run: |
+          if [ "Ghostie-sigma.apk" != "app-debug.apk" ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk "app/build/outputs/apk/debug/Ghostie-sigma.apk"
+          fi
       - name: Publish the APK
         uses: softprops/action-gh-release@v2
         with:
