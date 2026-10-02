@@ -99,6 +99,25 @@ static int makeContext(void) {
 }
 
 static int createInstance(JNIEnv *env, jobject activity) {
+    // The Android loader needs the VM and Context before discovering a runtime.
+    // Merely passing the activity to xrCreateInstance is too late.
+    PFN_xrInitializeLoaderKHR initializeLoader = NULL;
+    XrResult loaderResult = xrGetInstanceProcAddr(XR_NULL_HANDLE, "xrInitializeLoaderKHR", (PFN_xrVoidFunction *)(&initializeLoader));
+    if (XR_FAILED(loaderResult) || initializeLoader == NULL) {
+        LOGE("OpenXR loader initialization unavailable: %d", loaderResult);
+        return 0;
+    }
+    XrLoaderInitInfoAndroidKHR loaderInfo;
+    memset(&loaderInfo, 0, sizeof(loaderInfo));
+    loaderInfo.type = XR_TYPE_LOADER_INIT_INFO_ANDROID_KHR;
+    loaderInfo.applicationVM = gVm;
+    loaderInfo.applicationContext = activity;
+    loaderResult = initializeLoader((const XrLoaderInitInfoBaseHeaderKHR *)&loaderInfo);
+    if (XR_FAILED(loaderResult)) {
+        LOGE("OpenXR Android loader initialization failed: %d", loaderResult);
+        return 0;
+    }
+
     uint32_t extCount = 0;
     if (XR_FAILED(xrEnumerateInstanceExtensionProperties(NULL, 0, &extCount, NULL))) return 0;
     if (extCount == 0) return 0;
@@ -333,10 +352,13 @@ static int pollEvents(void) {
                 memset(&bi, 0, sizeof(bi));
                 bi.type = XR_TYPE_SESSION_BEGIN_INFO;
                 bi.primaryViewConfigurationType = gViewConfig;
-                if (XR_SUCCEEDED(xrBeginSession(gSession, &bi))) {
-                    gRunning = 1;
-                    LOGI("VR session running");
+                XrResult beginResult = xrBeginSession(gSession, &bi);
+                if (XR_FAILED(beginResult)) {
+                    LOGE("xrBeginSession failed: %d", beginResult);
+                    return 0;
                 }
+                gRunning = 1;
+                LOGI("VR session running");
             } else if (gState == XR_SESSION_STATE_STOPPING && gRunning) {
                 gRunning = 0;
                 xrEndSession(gSession);
@@ -347,19 +369,25 @@ static int pollEvents(void) {
     }
 }
 
-static void releaseImages(void) {
+static int releaseImages(void) {
+    int ok = 1;
     for (int e = 0; e < MAX_EYES; e++) {
         if (gAcquired > e) {
             XrSwapchainImageReleaseInfo ri;
             memset(&ri, 0, sizeof(ri));
             ri.type = XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO;
-            xrReleaseSwapchainImage(gSwap[e], &ri);
+            XrResult result = xrReleaseSwapchainImage(gSwap[e], &ri);
+            if (XR_FAILED(result)) {
+                LOGE("xrReleaseSwapchainImage failed for eye %d: %d", e, result);
+                ok = 0;
+            }
         }
     }
     gAcquired = 0;
+    return ok;
 }
 
-static void endFrameWith(int withLayers) {
+static XrResult endFrameWith(int withLayers) {
     XrCompositionLayerProjection layer;
     XrCompositionLayerProjectionView pv[MAX_EYES];
     const XrCompositionLayerBaseHeader *layers[1];
@@ -392,7 +420,9 @@ static void endFrameWith(int withLayers) {
     fei.environmentBlendMode = gBlend;
     fei.layerCount = layerCount;
     fei.layers = layerCount ? layers : NULL;
-    xrEndFrame(gSession, &fei);
+    XrResult result = xrEndFrame(gSession, &fei);
+    if (XR_FAILED(result)) LOGE("xrEndFrame failed: %d", result);
+    return result;
 }
 
 static float stickAxis(XrAction action, XrPath sub, int axis) {
@@ -446,6 +476,7 @@ static void teardown(void) {
     }
     gRunning = 0;
     gAcquired = 0;
+    gFloorSpace = 0;
     gState = XR_SESSION_STATE_UNKNOWN;
 }
 
@@ -454,7 +485,7 @@ JNIEXPORT jboolean JNICALL Java_com_vrunity_vrapk_Xr_start(JNIEnv *env, jobject 
     gShouldQuit = 0;
     (*env)->GetJavaVM(env, &gVm);
     if (gActivity == NULL) gActivity = (*env)->NewGlobalRef(env, activity);
-    if (!createInstance(env, activity)) {
+    if (!createInstance(env, gActivity)) {
         LOGE("No VR runtime available on this device");
         teardown();
         return JNI_FALSE;
@@ -492,7 +523,7 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_poll(JNIEnv *env, jobject thiz,
     gDisplayTime = frameState.predictedDisplayTime;
 
     if (!frameState.shouldRender) {
-        endFrameWith(0);
+        if (XR_FAILED(endFrameWith(0))) return -1;
         return 0;
     }
 
@@ -511,8 +542,15 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_poll(JNIEnv *env, jobject thiz,
         views[i].type = XR_TYPE_VIEW;
     }
     uint32_t viewCount = 0;
-    if (XR_FAILED(xrLocateViews(gSession, &li, &vs, MAX_EYES, &viewCount, views)) || viewCount < MAX_EYES) {
+    XrResult locateResult = xrLocateViews(gSession, &li, &vs, MAX_EYES, &viewCount, views);
+    if (XR_FAILED(locateResult)) {
+        LOGE("xrLocateViews failed: %d", locateResult);
         endFrameWith(0);
+        return -1;
+    }
+    XrViewStateFlags validPose = XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
+    if (viewCount < MAX_EYES || (vs.viewStateFlags & validPose) != validPose) {
+        if (XR_FAILED(endFrameWith(0))) return -1;
         return 0;
     }
 
@@ -521,24 +559,23 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_poll(JNIEnv *env, jobject thiz,
         memset(&ai, 0, sizeof(ai));
         ai.type = XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO;
         uint32_t idx = 0;
-        if (XR_FAILED(xrAcquireSwapchainImage(gSwap[e], &ai, &idx))) {
-            // One missed image is not the end of the session. Ending it here drops the
-            // app back to a screen view a headset never shows, so the frame goes out
-            // empty instead and the next one is tried normally.
+        XrResult acquireResult = xrAcquireSwapchainImage(gSwap[e], &ai, &idx);
+        if (XR_FAILED(acquireResult)) {
+            LOGE("xrAcquireSwapchainImage failed for eye %d: %d", e, acquireResult);
             releaseImages();
             endFrameWith(0);
-            return 0;
+            return -1;
         }
         XrSwapchainImageWaitInfo wi;
         memset(&wi, 0, sizeof(wi));
         wi.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
         wi.timeout = XR_INFINITE_DURATION;
-        if (XR_FAILED(xrWaitSwapchainImage(gSwap[e], &wi))) {
-            // Same again: keep the session alive and hand the compositor an empty
-            // frame rather than tearing VR down over one unusable image.
+        XrResult waitResult = xrWaitSwapchainImage(gSwap[e], &wi);
+        if (XR_FAILED(waitResult)) {
+            LOGE("xrWaitSwapchainImage failed for eye %d: %d", e, waitResult);
             releaseImages();
             endFrameWith(0);
-            return 0;
+            return -1;
         }
         gSwapIndex[e] = idx;
         gAcquired = e + 1;
@@ -614,12 +651,12 @@ JNIEXPORT jboolean JNICALL Java_com_vrunity_vrapk_Xr_floorSpace(JNIEnv *env, job
 
 JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_endFrame(JNIEnv *env, jobject thiz) {
     if (gSession == XR_NULL_HANDLE || gAcquired < MAX_EYES) return -1;
-    // The frame has to reach the runtime while it still owns the eye images that the
-    // frame points at. Releasing them first leaves the compositor with a frame it
-    // cannot show, which is a black headset however well the scene was drawn.
-    endFrameWith(1);
-    releaseImages();
-    if (gShouldQuit || !gRunning) return -1;
+    // OpenXR composites the most recently RELEASED image, not an acquired one.
+    // Flush the eye rendering, release both images, then submit the projection.
+    glFlush();
+    int released = releaseImages();
+    XrResult result = endFrameWith(released);
+    if (!released || XR_FAILED(result) || gShouldQuit || !gRunning) return -1;
     return 1;
 }
 

@@ -51,12 +51,9 @@ class XrSession(private val activity: Activity) {
             playerYaw = game.startYaw
             lastNs = System.nanoTime()
             submitted = loop(game)
-        } catch (t: Throwable) {
-            // Anything that fails while the headset is being opened — the scene, a
-            // shader, a pose — leaves the game on the screen view rather than hanging
-            // on a frame that will never be drawn.
-            submitted = 0
         } finally {
+            // Preserve startup/render exceptions for the activity to report instead
+            // of swallowing them and leaving the headset launch screen open.
             Xr.stop()
         }
         return if (submitted > 0) 2 else 1
@@ -66,7 +63,10 @@ class XrSession(private val activity: Activity) {
         var submitted = 0
         while (true) {
             val status = Xr.poll(viewData)
-            if (status < 0) return submitted
+            if (status < 0) {
+                check(submitted > 0) { "The headset ended VR before the first frame." }
+                return submitted
+            }
             // 0 means the runtime has a frame for us but has nothing for us to draw
             // yet: the headset is still opening the app, or nobody is wearing it. That
             // is the ordinary start of a VR session, not a failure — keep answering
@@ -82,8 +82,8 @@ class XrSession(private val activity: Activity) {
             Xr.input(stick)
             steer(dt)
             drawEyes(game)
+            check(Xr.endFrame() >= 0) { "The headset rejected the VR frame." }
             submitted++
-            if (Xr.endFrame() < 0) return submitted
         }
     }
 
@@ -154,7 +154,7 @@ class XrSession(private val activity: Activity) {
     private fun drawEyes(game: Game) {
         val w = Xr.eyeWidth()
         val h = Xr.eyeHeight()
-        if (w <= 0 || h <= 0) return
+        check(w > 0 && h > 0) { "The headset returned invalid eye dimensions." }
         if (fboW != w || fboH != h) targets(w, h)
         frameCount++
         // A floor-relative space already reports the eyes at their real height. One
@@ -180,13 +180,13 @@ class XrSession(private val activity: Activity) {
         Matrix.rotateM(playerM, 0, Math.toDegrees(playerYaw.toDouble()).toFloat(), 0f, 1f, 0f)
         for (eye in 0 until 2) {
             val tex = Xr.eyeTexture(eye)
-            if (tex == 0) continue
+            check(tex != 0) { "The headset did not supply an eye image." }
             val o = eye * 11
             // Each eye gets the runtime's own field of view for that lens.
             Matrix.frustumM(proj, 0,
                 tan(viewData[o].toDouble()).toFloat() * NEAR,
                 tan(viewData[o + 1].toDouble()).toFloat() * NEAR,
-                -tan(viewData[o + 3].toDouble()).toFloat() * NEAR,
+                tan(viewData[o + 3].toDouble()).toFloat() * NEAR,
                 tan(viewData[o + 2].toDouble()).toFloat() * NEAR,
                 NEAR, 600f)
             quatMatrix(rotM, viewData[o + 7], viewData[o + 8], viewData[o + 9], viewData[o + 10])
@@ -198,6 +198,9 @@ class XrSession(private val activity: Activity) {
             Matrix.invertM(view, 0, scratch, 0)
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo[eye])
             GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, tex, 0)
+            check(GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER) == GLES20.GL_FRAMEBUFFER_COMPLETE) {
+                "The headset eye framebuffer is incomplete."
+            }
             GLES20.glViewport(0, 0, w, h)
             // The first moments are a flat colour, so a blank headset can be told
             // apart from the scene simply not being drawn.

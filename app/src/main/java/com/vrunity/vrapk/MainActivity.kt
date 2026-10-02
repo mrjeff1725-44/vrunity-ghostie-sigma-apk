@@ -5,6 +5,8 @@ import android.os.Bundle
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.util.Log
+import android.widget.Toast
 
 // A native Android VR game. On a headset the app opens straight into the headset's
 // own VR session; on a device without one it falls back to screen mode.
@@ -14,23 +16,25 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        // The scene is put on screen straight away, before anything else is tried, so
-        // the app draws from its very first moment instead of waiting on a screen that
-        // may never come. Opening the headset's VR session happens alongside this and
-        // takes the app over when it succeeds.
-        startScreenMode()
+        val headset = packageManager.hasSystemFeature("android.hardware.vr.headtracking")
+        // Do not run a second EGL renderer behind an immersive headset session.
+        if (headset) setContentView(View(this)) else startScreenMode()
         val attempt = Thread {
-            // 2 = the headset ran the game, anything else leaves the scene on screen.
-            // Nothing this thread can do is allowed to end in a blank window, so every
-            // failure — including one this thread never sees coming — is caught here.
-            // The activity is deliberately NOT finished when VR takes over. From that
-            // point the headset's own session owns the display, and finishing the
-            // activity here tears that very session down again the moment it starts —
-            // which is what dropped the app straight back to its launch screen.
             try {
-                XrSession(this).run()
+                val result = XrSession(this).run()
+                if (headset) {
+                    if (result != 2) throw IllegalStateException("Unable to start the headset VR runtime.")
+                    // run() returns only after the immersive session ends.
+                    runOnUiThread { finish() }
+                }
             } catch (t: Throwable) {
-                // Whatever went wrong, the window never goes blank: screen mode stays.
+                Log.e("VRUnityXR", "VR launch or rendering failed", t)
+                if (headset) runOnUiThread {
+                    Toast.makeText(this, t.message ?: "VR could not start.", Toast.LENGTH_LONG).show()
+                    // A failed VR launch must return to the headset menu, not keep
+                    // a hidden flat window and its launch spinner alive forever.
+                    finish()
+                }
             }
         }
         attempt.start()
