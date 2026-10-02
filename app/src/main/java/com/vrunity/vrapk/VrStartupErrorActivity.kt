@@ -8,11 +8,15 @@ import android.os.Process
 import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 
 class VrStartupErrorActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        val enginePid = intent.getIntExtra("enginePid", -1)
+        if (enginePid > 0 && enginePid != Process.myPid()) Process.killProcess(enginePid)
+        VrLaunchFailure.success(this)
         val root = LinearLayout(this)
         root.orientation = LinearLayout.VERTICAL
         root.gravity = Gravity.CENTER
@@ -33,6 +37,9 @@ class VrStartupErrorActivity : Activity() {
             Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 300L)
         }
         root.addView(close)
-        setContentView(root)
+        val scroll = ScrollView(this)
+        scroll.isFillViewport = true
+        scroll.addView(root)
+        setContentView(scroll)
     }
 }

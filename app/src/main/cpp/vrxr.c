@@ -39,7 +39,7 @@ static XrPath gHandPath[MAX_EYES];
 static XrPosef gEyePose[MAX_EYES];
 static XrFovf gEyeFov[MAX_EYES];
 static XrTime gDisplayTime = 0;
-static XrSessionState gState = XR_SESSION_STATE_UNKNOWN;
+static _Atomic(XrSessionState) gState = XR_SESSION_STATE_UNKNOWN;
 static int gRunning = 0;
 static int gFloorSpace = 0;
 static int gAcquired = 0;
@@ -91,27 +91,57 @@ static void suggestProfile(const char *profile) {
     xrSuggestInteractionProfileBindings(gInstance, &sp);
 }
 
+static _Atomic int gGraphicsError = EGL_SUCCESS;
+static _Atomic(const char *) gGraphicsStep = NULL;
+
+static int graphicsFailure(const char *step) {
+    int error = eglGetError();
+    atomic_store(&gGraphicsStep, step);
+    atomic_store(&gGraphicsError, error);
+    LOGE("Graphics startup failed: %s (EGL 0x%x)", step, error);
+    return 0;
+}
+
 static int makeContext(void) {
+    atomic_store(&gGraphicsStep, NULL);
+    atomic_store(&gGraphicsError, EGL_SUCCESS);
     gEglDisplay = eglGetDisplay(EGL_DEFAULT_DISPLAY);
-    if (gEglDisplay == EGL_NO_DISPLAY) return 0;
-    if (!eglInitialize(gEglDisplay, NULL, NULL)) return 0;
-    EGLint cfgAttr[] = {
-        EGL_RENDERABLE_TYPE, 0x0040, /* EGL_OPENGL_ES3_BIT */
-        EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
+    if (gEglDisplay == EGL_NO_DISPLAY) return graphicsFailure("eglGetDisplay");
+    if (!eglInitialize(gEglDisplay, NULL, NULL)) return graphicsFailure("eglInitialize");
+    if (!eglBindAPI(EGL_OPENGL_ES_API)) return graphicsFailure("eglBindAPI");
+
+    EGLConfig configs[1024];
+    EGLint count = 0;
+    if (!eglGetConfigs(gEglDisplay, configs, 1024, &count)) return graphicsFailure("eglGetConfigs");
+    if (count > 1024) count = 1024;
+    const EGLint attributes[] = {
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
-        EGL_DEPTH_SIZE, 16,
-        EGL_NONE };
-    EGLint num = 0;
-    if (!eglChooseConfig(gEglDisplay, cfgAttr, &gEglConfig, 1, &num) || num < 1) return 0;
-    EGLint ctxAttr[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
-    gEglContext = eglCreateContext(gEglDisplay, gEglConfig, EGL_NO_CONTEXT, ctxAttr);
-    if (gEglContext == EGL_NO_CONTEXT) return 0;
-    EGLint pbAttr[] = { EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE };
-    gEglSurface = eglCreatePbufferSurface(gEglDisplay, gEglConfig, pbAttr);
-    if (gEglSurface == EGL_NO_SURFACE) return 0;
-    if (!eglMakeCurrent(gEglDisplay, gEglSurface, gEglSurface, gEglContext)) return 0;
+        EGL_DEPTH_SIZE, 0, EGL_STENCIL_SIZE, 0, EGL_SAMPLES, 0, EGL_SAMPLE_BUFFERS, 0, EGL_NONE
+    };
+    gEglConfig = 0;
+    for (EGLint i = 0; i < count; i++) {
+        EGLint renderable = 0, surfaces = 0;
+        if (!eglGetConfigAttrib(gEglDisplay, configs[i], EGL_RENDERABLE_TYPE, &renderable) ||
+            !eglGetConfigAttrib(gEglDisplay, configs[i], EGL_SURFACE_TYPE, &surfaces)) continue;
+        if (!(renderable & 0x0040) || (surfaces & (EGL_WINDOW_BIT | EGL_PBUFFER_BIT)) != (EGL_WINDOW_BIT | EGL_PBUFFER_BIT)) continue;
+        int matched = 1;
+        for (int a = 0; attributes[a] != EGL_NONE; a += 2) {
+            EGLint value = 0;
+            if (!eglGetConfigAttrib(gEglDisplay, configs[i], attributes[a], &value) || value != attributes[a + 1]) { matched = 0; break; }
+        }
+        if (matched) { gEglConfig = configs[i]; break; }
+    }
+    if (!gEglConfig) return graphicsFailure("No non-multisampled RGBA8 GLES3 window/pbuffer configuration");
+    const EGLint contextAttributes[] = { EGL_CONTEXT_CLIENT_VERSION, 3, EGL_NONE };
+    gEglContext = eglCreateContext(gEglDisplay, gEglConfig, EGL_NO_CONTEXT, contextAttributes);
+    if (gEglContext == EGL_NO_CONTEXT) return graphicsFailure("eglCreateContext");
+    const EGLint surfaceAttributes[] = { EGL_WIDTH, 16, EGL_HEIGHT, 16, EGL_NONE };
+    gEglSurface = eglCreatePbufferSurface(gEglDisplay, gEglConfig, surfaceAttributes);
+    if (gEglSurface == EGL_NO_SURFACE) return graphicsFailure("eglCreatePbufferSurface");
+    if (!eglMakeCurrent(gEglDisplay, gEglSurface, gEglSurface, gEglContext)) return graphicsFailure("eglMakeCurrent");
     return 1;
 }
+
 
 static int createInstance(JNIEnv *env, jobject activity) {
     // The Android loader needs the VM and Context before discovering a runtime.
@@ -684,12 +714,18 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_endFrame(JNIEnv *env, jobject t
     int released = releaseImages();
     XrResult result = endFrameWith(released);
     if (!released || XR_FAILED(result) || gShouldQuit || !gRunning) return -1;
-    startupState(12);
+    // Accepted submission alone does not mean Quest has made the scene visible.
+    // Keep the startup monitor armed while the compositor is still synchronizing.
+    if (gState == XR_SESSION_STATE_VISIBLE || gState == XR_SESSION_STATE_FOCUSED) startupState(12);
     return 1;
 }
 
 JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_startupState(JNIEnv *env, jobject thiz) {
     return atomic_load(&gStartupState);
+}
+
+JNIEXPORT void JNICALL Java_com_vrunity_vrapk_Xr_markStartupStage(JNIEnv *env, jobject thiz, jint stage) {
+    if (stage == 13 || stage == 14) startupState(stage);
 }
 
 JNIEXPORT jstring JNICALL Java_com_vrunity_vrapk_Xr_startupDetail(JNIEnv *env, jobject thiz) {
@@ -698,13 +734,18 @@ JNIEXPORT jstring JNICALL Java_com_vrunity_vrapk_Xr_startupDetail(JNIEnv *env, j
         "Creating OpenXR instance", "Finding headset system", "Creating graphics context",
         "Opening headset session", "Creating eye swapchains", "Waiting for session READY",
         "Waiting for first headset frame", "Waiting for valid tracking",
-        "Waiting for eye image", "Submitting first VR frame", "VR running"
+        "Waiting for eye image", "Submitting first VR frame", "VR running",
+        "Reading scene", "Uploading geometry and compiling shaders"
     };
     int state = atomic_load(&gStartupState);
     int error = atomic_load(&gStartupError);
     char detail[256];
-    const char *stage = state >= 0 && state <= 12 ? stages[state] : "Unknown startup stage";
-    if (error) snprintf(detail, sizeof(detail), "%s (OpenXR error %d)", stage, error);
+    const char *stage = state >= 0 && state <= 14 ? stages[state] : "Unknown startup stage";
+    const char *graphicsStep = atomic_load(&gGraphicsStep);
+    int graphicsError = atomic_load(&gGraphicsError);
+    if (graphicsStep && graphicsError != EGL_SUCCESS) snprintf(detail, sizeof(detail), "%s: %s (EGL 0x%x)", stage, graphicsStep, graphicsError);
+    else if (graphicsStep) snprintf(detail, sizeof(detail), "%s: %s", stage, graphicsStep);
+    else if (error) snprintf(detail, sizeof(detail), "%s (OpenXR error %d)", stage, error);
     else snprintf(detail, sizeof(detail), "%s", stage);
     return (*env)->NewStringUTF(env, detail);
 }

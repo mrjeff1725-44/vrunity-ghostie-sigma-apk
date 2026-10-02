@@ -1,32 +1,11 @@
 package com.vrunity.vrapk
 
-import android.opengl.GLES20
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.FloatBuffer
-
 // The game's geometry, built on the device at start-up: positions and normals in
 // one buffer, six floats per vertex.
 class Mesh(vertices: FloatArray) {
-    private val buffer: FloatBuffer
-    private val count: Int
+    private val gpu = VertexBuffer(vertices)
 
-    init {
-        buffer = ByteBuffer.allocateDirect(vertices.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
-        buffer.put(vertices)
-        buffer.position(0)
-        count = vertices.size / 6
-    }
-
-    fun draw(posHandle: Int, normHandle: Int) {
-        buffer.position(0)
-        GLES20.glVertexAttribPointer(posHandle, 3, GLES20.GL_FLOAT, false, 24, buffer)
-        GLES20.glEnableVertexAttribArray(posHandle)
-        buffer.position(3)
-        GLES20.glVertexAttribPointer(normHandle, 3, GLES20.GL_FLOAT, false, 24, buffer)
-        GLES20.glEnableVertexAttribArray(normHandle)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, count)
-    }
+    fun draw(posHandle: Int, normHandle: Int) { gpu.draw(posHandle, normHandle) }
 
     companion object {
         private fun push(v: ArrayList<Float>, p: FloatArray, n: FloatArray) {

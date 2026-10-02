@@ -40,20 +40,27 @@ class XrSession(private val activity: Activity) {
 
     // 2 = the headset ran the game, 1 = VR opened but never handed over a frame,
     // 0 = there is no VR runtime here and the screen mode should be used instead.
-    fun run(): Int {
+    fun run(onFailure: (String) -> Unit): Int {
         var submitted = 0
         try {
             if (!Xr.start(activity)) return 0
+            Xr.markStartupStage(13)
+            VrLaunchFailure.phase(activity, Xr.startupDetail())
             val game = Game(activity)
+            Xr.markStartupStage(14)
+            VrLaunchFailure.phase(activity, Xr.startupDetail())
             game.setup()
             playerX = game.startX
             playerZ = game.startZ
             playerYaw = game.startYaw
             lastNs = System.nanoTime()
             submitted = loop(game)
+        } catch (t: Throwable) {
+            // Report BEFORE teardown: a driver failure can block native cleanup,
+            // and reporting only after finally hid the original exception.
+            onFailure(t.toString() + "\n" + Xr.startupDetail())
+            throw t
         } finally {
-            // Preserve startup/render exceptions for the activity to report instead
-            // of swallowing them and leaving the headset launch screen open.
             Xr.stop()
         }
         return if (submitted > 0) 2 else 1
@@ -203,6 +210,8 @@ class XrSession(private val activity: Activity) {
             // apart from the scene simply not being drawn.
             if (frameCount <= 40) game.clearTo(1f, 0f, 1f) else game.clear()
             game.draw(view, proj)
+            val error = GLES20.glGetError()
+            check(error == GLES20.GL_NO_ERROR) { "Eye rendering failed (OpenGL 0x" + Integer.toHexString(error) + ")." }
             GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
         }
     }

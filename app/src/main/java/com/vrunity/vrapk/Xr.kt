@@ -20,6 +20,7 @@ object Xr {
     external fun stop()
     external fun startupState(): Int
     external fun startupDetail(): String
+    external fun markStartupStage(stage: Int)
     external fun nativeWindowReady(): Boolean
     fun load() {}
 

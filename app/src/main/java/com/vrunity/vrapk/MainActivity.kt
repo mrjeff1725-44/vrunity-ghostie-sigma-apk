@@ -18,7 +18,8 @@ class MainActivity : NativeActivity() {
     private val startupWatch = object : Runnable {
         override fun run() {
             if (closing || isDestroyed) return
-            if (Xr.startupState() == 12) return
+            if (Xr.startupState() == 12) { VrLaunchFailure.success(this@MainActivity); return }
+            VrLaunchFailure.phase(this@MainActivity, Xr.startupDetail())
             if (SystemClock.elapsedRealtime() - waitingSince >= 30000L) {
                 reportFailure("No first VR frame: " + Xr.startupDetail())
                 return
@@ -28,10 +29,12 @@ class MainActivity : NativeActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        fullscreen()
+        val previousFailure = VrLaunchFailure.begin(this)
         try {
+            super.onCreate(savedInstanceState)
+            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            fullscreen()
+            if (previousFailure != null) { reportFailure(previousFailure); return }
             Xr.load()
         } catch (t: Throwable) {
             reportFailure(t.toString())
@@ -45,7 +48,7 @@ class MainActivity : NativeActivity() {
                 if (closing || isDestroyed) return@Thread
                 // Always attempt OpenXR. Android's optional headtracking feature
                 // is not a reliable gate for deciding whether to start the engine.
-                val result = XrSession(this).run()
+                val result = XrSession(this).run(::reportFailure)
                 if (result == 0 && !packageManager.hasSystemFeature("android.hardware.vr.headtracking") &&
                     !android.os.Build.MANUFACTURER.equals("Oculus", true) &&
                     !android.os.Build.MANUFACTURER.equals("Meta", true)) {
@@ -68,7 +71,10 @@ class MainActivity : NativeActivity() {
             closing = true
             handler.removeCallbacks(startupWatch)
             Log.e("VRUnityXR", reason)
-            startActivity(Intent(this, VrStartupErrorActivity::class.java).putExtra("reason", reason))
+            VrLaunchFailure.failure(this, reason)
+            startActivity(Intent(this, VrStartupErrorActivity::class.java)
+                .putExtra("reason", reason).putExtra("enginePid", android.os.Process.myPid())
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             finish()
         }
     }
@@ -76,6 +82,7 @@ class MainActivity : NativeActivity() {
     // Keep the existing phone-holder mode only when OpenXR actually reports no
     // runtime on a non-headset. Never place a flat game behind Quest's VR overlay.
     private fun startScreenMode() {
+        VrLaunchFailure.success(this)
         handler.removeCallbacks(startupWatch)
         val view = VrSurfaceView(this)
         surface = view
