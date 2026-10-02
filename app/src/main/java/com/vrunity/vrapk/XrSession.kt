@@ -171,7 +171,12 @@ class XrSession(private val activity: Activity) {
         playerY = if (Xr.floorSpace()) 0f else game.eyeHeight
         // The scene moves forward once per frame, with the player's head as the ear
         // that hears it.
-        game.update(playerX, playerY + game.eyeHeight, playerZ, view[0], view[2])
+        val teleport = game.update(playerX, playerY + game.eyeHeight, playerZ, view[0], view[2])
+        if (teleport != null) {
+            playerX = teleport[0]
+            playerY = teleport[1] + (if (Xr.floorSpace()) 0f else game.eyeHeight)
+            playerZ = teleport[2]
+        }
         // A pose that is not a number would make the frustum degenerate and hide the
         // whole scene, so it is replaced with a sane view instead.
         for (i in 0 until 22) {

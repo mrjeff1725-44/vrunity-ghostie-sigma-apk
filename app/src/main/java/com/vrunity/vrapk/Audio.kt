@@ -57,6 +57,23 @@ object Audio {
         }
     }
 
+    // A trigger or a delay playing or stopping one of the scene's sounds. A sound
+    // that is played starts again from the top.
+    fun play(index: Int, play: Boolean) {
+        val s = sounds.getOrNull(index) ?: return
+        try {
+            if (play) {
+                s.player.seekTo(0)
+                s.player.start()
+            } else {
+                s.player.pause()
+                s.player.seekTo(0)
+            }
+        } catch (t: Throwable) {
+            Log.e("VRUnityXR", "Sound not playing: " + t)
+        }
+    }
+
     fun stop() {
         for (s in sounds) {
             try { s.player.stop() } catch (t: Throwable) {}

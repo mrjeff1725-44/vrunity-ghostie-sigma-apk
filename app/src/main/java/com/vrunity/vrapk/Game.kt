@@ -7,9 +7,12 @@ import android.opengl.Matrix
 // The game on the GPU: the scene's geometry plus the shader that draws it. Both
 // the headset's VR session and the phone's own screen mode draw through this, so
 // the two always show the same game.
-class Game(context: Context) {
+class Game(context: Context) : LogicWorld {
     private val context = context
     private val scene = Scene.load(context)
+    // The scene's own logic: the zones the player walks through and the delays that
+    // count down.
+    private val logic = Logic(scene, this)
     private val shapes = HashMap<String, Mesh>()
     // The models and images the scene came with, loaded once at start-up.
     private val models = HashMap<String, BakedModel>()
@@ -78,14 +81,24 @@ class Game(context: Context) {
         // The scene's own sounds, read from the app's own files.
         Audio.start(context, scene.sounds)
         // The scene's lights and fog are the same for every object, so they are set
-        // once here instead of on every draw.
+        // once here instead of on every draw. A trigger that changes them pushes them
+        // again the moment it runs.
+        applyWorld()
+    }
+
+    // The scene's lighting and fog, pushed to the shader: the world's own light and
+    // the scene's light object, the fill light, and the scene's fog.
+    fun applyWorld() {
+        if (program == 0) return
         GLES20.glUseProgram(program)
-        GLES20.glUniform3f(uSunDir0, scene.sunDir[0], scene.sunDir[1], scene.sunDir[2])
-        GLES20.glUniform3f(uSunColor0, scene.sunColor[0], scene.sunColor[1], scene.sunColor[2])
-        GLES20.glUniform3f(uSunDir1, scene.sunDir[3], scene.sunDir[4], scene.sunDir[5])
-        GLES20.glUniform3f(uSunColor1, scene.sunColor[3], scene.sunColor[4], scene.sunColor[5])
-        GLES20.glUniform3f(uAmbSky, scene.ambientSky[0], scene.ambientSky[1], scene.ambientSky[2])
-        GLES20.glUniform3f(uAmbGround, scene.ambientGround[0], scene.ambientGround[1], scene.ambientGround[2])
+        val light = if (scene.worldOn) scene.worldIntensity else 0f
+        val ambient = if (scene.worldOn) scene.ambientIntensity else 0f
+        GLES20.glUniform3f(uSunDir0, scene.worldDir[0], scene.worldDir[1], scene.worldDir[2])
+        GLES20.glUniform3f(uSunColor0, scene.worldColor[0] * light, scene.worldColor[1] * light, scene.worldColor[2] * light)
+        GLES20.glUniform3f(uSunDir1, scene.objectDir[0], scene.objectDir[1], scene.objectDir[2])
+        GLES20.glUniform3f(uSunColor1, scene.objectColor[0], scene.objectColor[1], scene.objectColor[2])
+        GLES20.glUniform3f(uAmbSky, scene.ambientSky[0] * ambient, scene.ambientSky[1] * ambient, scene.ambientSky[2] * ambient)
+        GLES20.glUniform3f(uAmbGround, scene.ambientGround[0] * ambient, scene.ambientGround[1] * ambient, scene.ambientGround[2] * ambient)
         GLES20.glUniform3f(uFogColor, scene.fogColor[0], scene.fogColor[1], scene.fogColor[2])
         GLES20.glUniform2f(uFogRange, scene.fogNear, scene.fogFar)
         GLES20.glUniform1f(uFogOn, scene.fogOn)
@@ -175,8 +188,9 @@ class Game(context: Context) {
 
     // One step of the game: the scene's animation moves forward, a model attached to
     // an object follows the object it belongs to, and the scene's sounds are placed
-    // around the player's head.
-    fun update(listenerX: Float, listenerY: Float, listenerZ: Float, rightX: Float, rightZ: Float) {
+    // around the player's head. The scene's own logic runs here too, and where a
+    // teleport action asked the player to stand is handed back to the caller.
+    fun update(listenerX: Float, listenerY: Float, listenerZ: Float, rightX: Float, rightZ: Float): FloatArray? {
         val now = seconds()
         var dt = if (lastFrame < 0f) 0f else now - lastFrame
         lastFrame = now
@@ -200,6 +214,12 @@ class Game(context: Context) {
             System.arraycopy(scene.items[parent].rotM, 0, item.rotM, 0, 9)
         }
         Audio.update(listenerX, listenerY, listenerZ, rightX, rightZ)
+        // The scene's logic — the zones the player walks through and the delays that
+        // count down — stepped with the player's head where it is.
+        logic.step(dt, listenerX, listenerY, listenerZ)
+        val teleport = pendingTeleport
+        pendingTeleport = null
+        return teleport
     }
 
     // Puts an animated object where its keyframes say it is at this moment. The
@@ -241,6 +261,51 @@ class Game(context: Context) {
     // The scene's sounds stop with the game.
     fun stopAudio() {
         Audio.stop()
+    }
+
+    // Where a teleport action asked the player to stand, handed to the caller after
+    // the frame has been stepped.
+    private var pendingTeleport: FloatArray? = null
+
+    // The actions a trigger, a delay or a Foundation Block takes on the scene. Each
+    // one was resolved at build time to the object or sound it applies to.
+    override fun applyColor(index: Int, color: FloatArray) {
+        val item = scene.items.getOrNull(index) ?: return
+        item.color[0] = color[0]
+        item.color[1] = color[1]
+        item.color[2] = color[2]
+    }
+
+    override fun applyAlpha(index: Int, value: Float) {
+        val item = scene.items.getOrNull(index) ?: return
+        item.opacity = value.coerceIn(0f, 1f)
+        // A surface that is less than solid is drawn with the see-through pass and a
+        // solid one with the solid pass — the same rule the editor follows when a
+        // block sets transparency.
+        item.blend = item.opacity < 1f
+    }
+
+    override fun applyTransform(index: Int, kind: Int, value: FloatArray) {
+        val item = scene.items.getOrNull(index) ?: return
+        val to = when (kind) {
+            0 -> item.pos
+            1 -> item.rot
+            else -> item.scale
+        }
+        for (k in 0 until 3) to[k] = value[k]
+        Scene.compose(item)
+    }
+
+    override fun playSound(index: Int, play: Boolean) {
+        Audio.play(index, play)
+    }
+
+    override fun teleportTo(x: Float, y: Float, z: Float) {
+        pendingTeleport = floatArrayOf(x, y, z)
+    }
+
+    override fun worldChanged() {
+        applyWorld()
     }
 
     fun clear() {
@@ -293,6 +358,8 @@ class Game(context: Context) {
             val model = if (item.model.isEmpty()) null else models[item.model]
             if (model != null) {
                 // A model is drawn from both sides, exactly as the editor draws it.
+                // Its own colour is the one baked from the scene, changed by anything
+                // a trigger has set on the object since.
                 GLES20.glDisable(GLES20.GL_CULL_FACE)
                 for (part in model.parts) {
                     // A texture the scene put on the object covers the model's own.
@@ -300,7 +367,7 @@ class Game(context: Context) {
                     val texture = if (named.isEmpty()) 0 else textures[named] ?: 0
                     GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, if (texture != 0) texture else white)
                     GLES20.glUniform1f(uUseTex, if (texture != 0) 1f else 0f)
-                    GLES20.glUniform3f(uColor, part.tint[0], part.tint[1], part.tint[2])
+                    GLES20.glUniform3f(uColor, part.tint[0] * item.color[0], part.tint[1] * item.color[1], part.tint[2] * item.color[2])
                     GLES20.glUniform1f(uAlpha, part.tint[3] * item.opacity)
                     part.mesh.draw(aPos, aNormal, aUv, part.start, part.count)
                 }

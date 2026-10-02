@@ -168,7 +168,13 @@ class VrRenderer(private val context: Context) : GLSurfaceView.Renderer {
         // The scene moves forward once per frame, with the eye as the ear that hears
         // it. The view still holds the last frame's, which is where the head was a
         // moment ago.
-        game.update(eyeX, eyeY, eyeZ, view[0], view[2])
+        // A teleport action moves the player before this frame's eyes are built.
+        val teleport = game.update(eyeX, eyeY, eyeZ, view[0], view[2])
+        if (teleport != null) {
+            player[0] = teleport[0]
+            player[1] = teleport[1] + game.eyeHeight
+            player[2] = teleport[2]
+        }
         game.clear()
         Matrix.perspectiveM(proj, 0, 72f, half.toFloat() / height.toFloat(), 0.05f, 600f)
         for (eye in 0 until 2) {

@@ -30,16 +30,28 @@ class Scene private constructor() {
     var skyHaze = 0.25f
     var skyGlow = 1f
     val flatSky = floatArrayOf(0.02f, 0.02f, 0.03f)
-    // At most two directional lights: the world's own light and the scene's light.
-    // An unused second light points straight up with no colour, so it adds nothing.
-    val sunDir = floatArrayOf(0f, 1f, 0f, 0f, 1f, 0f)
-    val sunColor = FloatArray(6)
+    // The lights that light the scene: the world's own light — which a trigger can
+    // change while the scene runs — and the scene's light object, if it has one. An
+    // unused second light points straight up with no colour, so it adds nothing.
+    val worldDir = floatArrayOf(0f, 1f, 0f)
+    val worldColor = floatArrayOf(1f, 1f, 1f)
+    var worldOn = true
+    var worldIntensity = 1f
+    val objectDir = floatArrayOf(0f, 1f, 0f)
+    val objectColor = floatArrayOf(0f, 0f, 0f)
+    // The scene's fill light, kept as the colours it is made of and its strength, so
+    // a trigger can change the strength without losing the colours.
     val ambientSky = floatArrayOf(0f, 0f, 0f)
     val ambientGround = floatArrayOf(0f, 0f, 0f)
+    var ambientIntensity = 0.35f
     var fogOn = 0f
     var fogNear = 10f
     var fogFar = 60f
     val fogColor = floatArrayOf(0.5f, 0.5f, 0.5f)
+    // The scene's own logic: the trigger zones the player walks through and the
+    // delays that count down, each carrying the actions it runs.
+    val triggers = ArrayList<Trigger>()
+    val delays = ArrayList<Delay>()
 
     // A surface to draw: either one of the device's own shapes, or a model baked
     // from the scene (an imported model, 3D text, a model attached to an object),
@@ -50,12 +62,14 @@ class Scene private constructor() {
         val model: String,
         val tex: String,
         val uv: Float,
-        val blend: Boolean,
+        // The see-through flag and the opacity belong to the scene, and a trigger can
+        // change both while the scene runs.
+        var blend: Boolean,
         val pos: FloatArray,
         val rot: FloatArray,
         val scale: FloatArray,
         val color: FloatArray,
-        val opacity: Float,
+        var opacity: Float,
         val anim: Anim?,
         val parent: Int,
     ) {
@@ -117,6 +131,8 @@ class Scene private constructor() {
                 compose(item)
                 scene.items.add(item)
             }
+            // The scene's zones and delays, with the actions each one runs.
+            Logic.read(scene, root)
             return scene
         }
 
@@ -200,20 +216,39 @@ class Scene private constructor() {
             val lights = root.optJSONObject("lights") ?: return
             val suns = lights.optJSONArray("suns")
             if (suns != null) {
-                val count = minOf(2, suns.length())
-                for (i in 0 until count) {
-                    val sun = suns.optJSONObject(i) ?: continue
-                    copy3(sun.optJSONArray("dir"), scene.sunDir, i * 3)
-                    copy3(sun.optJSONArray("color"), scene.sunColor, i * 3)
+                // The first light is the world's own and the second, when the scene
+                // has one, is the scene's light object.
+                val world = suns.optJSONObject(0)
+                if (world != null) {
+                    copy3(world.optJSONArray("dir"), scene.worldDir)
+                    copy3(world.optJSONArray("color"), scene.worldColor)
+                }
+                val obj = suns.optJSONObject(1)
+                if (obj != null) {
+                    copy3(obj.optJSONArray("dir"), scene.objectDir)
+                    copy3(obj.optJSONArray("color"), scene.objectColor)
                 }
             }
-            copy3(lights.optJSONArray("ambientSky"), scene.ambientSky)
-            copy3(lights.optJSONArray("ambientGround"), scene.ambientGround)
+            val settings = lights.optJSONObject("world")
+            if (settings != null) {
+                scene.worldOn = settings.optBoolean("on", true)
+                scene.worldIntensity = settings.optDouble("intensity", 1.0).toFloat()
+                copy3(settings.optJSONArray("color"), scene.worldColor)
+                copy3(settings.optJSONArray("dir"), scene.worldDir)
+            }
+            val ambient = lights.optJSONObject("ambient")
+            if (ambient != null) {
+                copy3(ambient.optJSONArray("sky"), scene.ambientSky)
+                copy3(ambient.optJSONArray("ground"), scene.ambientGround)
+                scene.ambientIntensity = ambient.optDouble("intensity", 0.35).toFloat()
+            }
         }
 
         private fun readFog(root: JSONObject, scene: Scene) {
             val fog = root.optJSONObject("fog") ?: return
-            scene.fogOn = 1f
+            // The scene's own distances and colour are read even while the fog is
+            // off, so a trigger that turns it on has the scene's values to use.
+            scene.fogOn = if (fog.optBoolean("on", false)) 1f else 0f
             scene.fogNear = fog.optDouble("near", 10.0).toFloat()
             scene.fogFar = fog.optDouble("far", 60.0).toFloat()
             copy3(fog.optJSONArray("color"), scene.fogColor)

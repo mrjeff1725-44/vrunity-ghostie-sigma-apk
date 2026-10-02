@@ -98,6 +98,14 @@ class SkyRenderer {
         quad.put(3f); quad.put(-1f)
         quad.put(-1f); quad.put(3f)
         quad.position(0)
+        apply(scene)
+    }
+
+    // The scene's sky, pushed to the shader: the same gradient, sun and stars the
+    // editor shows. Called at start-up and again whenever a trigger changes the sky
+    // while the scene runs.
+    fun apply(scene: Scene) {
+        if (program == 0) return
         GLES20.glUseProgram(program)
         GLES20.glUniform3f(uTop, scene.skyTop[0], scene.skyTop[1], scene.skyTop[2])
         GLES20.glUniform3f(uHorizon, scene.skyHorizon[0], scene.skyHorizon[1], scene.skyHorizon[2])
