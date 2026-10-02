@@ -31,6 +31,9 @@ class VrRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var height = 1
     private val player = floatArrayOf(0f, 1.6f, 0f)
     private var rigYaw = 0f
+    private var eyeX = 0f
+    private var eyeY = 0f
+    private var eyeZ = 0f
 
     private val proj = FloatArray(16)
     private val view = FloatArray(16)
@@ -152,6 +155,9 @@ class VrRenderer(private val context: Context) : GLSurfaceView.Renderer {
         val ex = player[0] + rx * eyeOffset
         val ey = player[1] + ry * eyeOffset
         val ez = player[2] + rz * eyeOffset
+        eyeX = ex
+        eyeY = ey
+        eyeZ = ez
         Matrix.setIdentityM(moveM, 0)
         Matrix.translateM(moveM, 0, -ex, -ey, -ez)
         Matrix.multiplyMM(view, 0, camM, 0, moveM, 0)
@@ -165,6 +171,7 @@ class VrRenderer(private val context: Context) : GLSurfaceView.Renderer {
             val offset = if (eye == 0) -0.032f else 0.032f
             buildView(offset)
             GLES20.glViewport(eye * half, 0, half, height)
+            game.drawSky(view, proj, eyeX, eyeY, eyeZ)
             game.draw(view, proj)
         }
     }

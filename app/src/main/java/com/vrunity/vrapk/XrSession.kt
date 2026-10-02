@@ -209,6 +209,8 @@ class XrSession(private val activity: Activity) {
             // The first moments are a flat colour, so a blank headset can be told
             // apart from the scene simply not being drawn.
             if (frameCount <= 40) game.clearTo(1f, 0f, 1f) else game.clear()
+            // The sky first, worked out for this eye's exact view, then the scene over it.
+            game.drawSky(view, proj, scratch[12], scratch[13], scratch[14])
             game.draw(view, proj)
             val error = GLES20.glGetError()
             check(error == GLES20.GL_NO_ERROR) { "Eye rendering failed (OpenGL 0x" + Integer.toHexString(error) + ")." }

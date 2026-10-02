@@ -30,15 +30,6 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/.android"
           keytool -genkeypair -keystore "$RUNNER_TEMP/.android/debug.keystore" -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" -noprompt
-      - name: Use the app picture
-        run: |
-          mkdir -p app/src/main/res/drawable
-          if base64 -d icon.b64 > app/src/main/res/drawable/app_icon.png 2>/dev/null && [ "$(od -An -tx1 -N4 app/src/main/res/drawable/app_icon.png | tr -d '[:space:]')" = "89504e47" ]; then
-            echo "app picture applied"
-          else
-            sed -i 's/ android:icon="@drawable\/app_icon"//; s/ android:roundIcon="@drawable\/app_icon"//' app/src/main/AndroidManifest.xml
-            echo "no app picture - the build continues without one"
-          fi
       - name: Build the game
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}

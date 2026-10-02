@@ -10,8 +10,6 @@
   <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="false" />
   <application
       android:label="Ghostie sigma"
-      android:icon="@drawable/app_icon"
-      android:roundIcon="@drawable/app_icon"
       android:theme="@android:style/Theme.Black.NoTitleBar.Fullscreen"
       android:hardwareAccelerated="true"
       android:allowBackup="false">
