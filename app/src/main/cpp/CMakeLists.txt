@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.18)
 project(vrxr C)
 
-add_library(vrxr SHARED vrxr.c)
+add_library(vrxr SHARED vrxr.c native_activity.c)
+set_target_properties(vrxr PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES)
 
 # The headset's VR runtime loader, the standard piece every VR app links against.
 # The build fetches it before Gradle runs.
@@ -14,5 +15,6 @@ target_include_directories(vrxr PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/openxr)
 find_library(egl_lib EGL)
 find_library(gles_lib GLESv2)
 find_library(log_lib log)
+find_library(android_lib android)
 
-target_link_libraries(vrxr openxr_loader ${egl_lib} ${gles_lib} ${log_lib})
+target_link_libraries(vrxr openxr_loader ${egl_lib} ${gles_lib} ${log_lib} ${android_lib})

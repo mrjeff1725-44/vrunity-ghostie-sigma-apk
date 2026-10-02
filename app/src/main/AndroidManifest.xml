@@ -23,6 +23,7 @@
         android:launchMode="singleTask"
         android:resizeableActivity="false"
         android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|density|uiMode|smallestScreenSize">
+      <meta-data android:name="android.app.lib_name" android:value="vrxr" />
       <intent-filter>
         <action android:name="android.intent.action.MAIN" />
         <category android:name="android.intent.category.LAUNCHER" />
@@ -31,5 +32,6 @@
         <category android:name="com.google.intent.category.CARDBOARD" />
       </intent-filter>
     </activity>
+    <activity android:name=".VrStartupErrorActivity" android:exported="false" android:excludeFromRecents="true" />
   </application>
 </manifest>

@@ -19,6 +19,8 @@ object Xr {
     external fun endFrame(): Int
     external fun stop()
     external fun startupState(): Int
+    external fun startupDetail(): String
+    external fun nativeWindowReady(): Boolean
     fun load() {}
 
     init {

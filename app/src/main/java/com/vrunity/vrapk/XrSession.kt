@@ -41,9 +41,9 @@ class XrSession(private val activity: Activity) {
     // 2 = the headset ran the game, 1 = VR opened but never handed over a frame,
     // 0 = there is no VR runtime here and the screen mode should be used instead.
     fun run(): Int {
-        if (!Xr.start(activity)) return 0
         var submitted = 0
         try {
+            if (!Xr.start(activity)) return 0
             val game = Game(activity)
             game.setup()
             playerX = game.startX
@@ -61,17 +61,14 @@ class XrSession(private val activity: Activity) {
 
     private fun loop(game: Game): Int {
         var submitted = 0
-        val startedNs = System.nanoTime()
         while (!activity.isFinishing && !activity.isDestroyed) {
             val status = Xr.poll(viewData)
             if (status < 0) {
                 check(submitted > 0) { "The headset ended VR before the first frame." }
                 return submitted
             }
-            // A session that never reaches the point of handing over a frame would
-            // otherwise leave the headset on its launch screen for ever, so startup
-            // is given a limit and the game falls back to the screen afterwards.
-            if (submitted == 0 && (System.nanoTime() - startedNs) / 1000000000L > 25L) return 0
+            // Startup is watched outside this thread: poll may block inside the
+            // runtime, so a deadline checked after poll cannot bound startup.
             // Empty frames are normal while the session is being set up.
             if (status == 0) continue
             val now = System.nanoTime()
