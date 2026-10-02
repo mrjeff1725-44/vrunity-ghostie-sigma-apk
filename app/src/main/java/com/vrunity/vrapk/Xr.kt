@@ -18,6 +18,8 @@ object Xr {
     external fun floorSpace(): Boolean
     external fun endFrame(): Int
     external fun stop()
+    external fun startupState(): Int
+    fun load() {}
 
     init {
         System.loadLibrary("vrxr")

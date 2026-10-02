@@ -61,19 +61,14 @@ class XrSession(private val activity: Activity) {
 
     private fun loop(game: Game): Int {
         var submitted = 0
-        while (true) {
+        while (!activity.isFinishing && !activity.isDestroyed) {
             val status = Xr.poll(viewData)
             if (status < 0) {
                 check(submitted > 0) { "The headset ended VR before the first frame." }
                 return submitted
             }
-            // 0 means the runtime has a frame for us but has nothing for us to draw
-            // yet: the headset is still opening the app, or nobody is wearing it. That
-            // is the ordinary start of a VR session, not a failure — keep answering
-            // with frames and keep waiting, for as long as it takes. Giving up here
-            // after a few seconds is exactly what left the headset on its loading
-            // screen: the app dropped to a screen view a headset never shows, and the
-            // runtime was left waiting for a frame that never came.
+            // Empty frames are normal during a lifecycle transition. The activity
+            // separately watches startup without racing this thread's XR ownership.
             if (status == 0) continue
             val now = System.nanoTime()
             var dt = (now - lastNs) / 1000000000f
@@ -85,6 +80,7 @@ class XrSession(private val activity: Activity) {
             check(Xr.endFrame() >= 0) { "The headset rejected the VR frame." }
             submitted++
         }
+        return submitted
     }
 
     private fun dead(v: Float): Float = if (Math.abs(v) < 0.15f) 0f else v

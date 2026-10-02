@@ -5,6 +5,7 @@
 #include <android/log.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdatomic.h>
 #include <unistd.h>
 #include <EGL/egl.h>
 #include <GLES3/gl3.h>
@@ -48,6 +49,13 @@ static EGLContext gEglContext = EGL_NO_CONTEXT;
 static EGLSurface gEglSurface = EGL_NO_SURFACE;
 static jobject gActivity = NULL;
 static JavaVM *gVm = NULL;
+static _Atomic int gStartupState = 0;
+
+// Only startup is monitored. A first successful submission permanently disarms
+// the activity watchdog; this lock-free read is safe even if the XR thread blocks.
+static void startupState(int state) {
+    if (atomic_load(&gStartupState) != 12) atomic_store(&gStartupState, state);
+}
 
 static XrPath pathOf(const char *s) {
     XrPath p = XR_NULL_PATH;
@@ -82,7 +90,7 @@ static int makeContext(void) {
     if (!eglInitialize(gEglDisplay, NULL, NULL)) return 0;
     EGLint cfgAttr[] = {
         EGL_RENDERABLE_TYPE, 0x0040, /* EGL_OPENGL_ES3_BIT */
-        EGL_SURFACE_TYPE, EGL_PBUFFER_BIT,
+        EGL_SURFACE_TYPE, EGL_WINDOW_BIT | EGL_PBUFFER_BIT,
         EGL_RED_SIZE, 8, EGL_GREEN_SIZE, 8, EGL_BLUE_SIZE, 8, EGL_ALPHA_SIZE, 8,
         EGL_DEPTH_SIZE, 16,
         EGL_NONE };
@@ -164,6 +172,7 @@ static int createInstance(JNIEnv *env, jobject activity) {
     ci.applicationInfo.apiVersion = XR_MAKE_VERSION(1, 0, 0);
     ci.enabledExtensionCount = useCount;
     ci.enabledExtensionNames = use;
+    startupState(2);
     if (XR_FAILED(xrCreateInstance(&ci, &gInstance))) {
         gInstance = XR_NULL_HANDLE;
         return 0;
@@ -176,6 +185,7 @@ static int createSession(void) {
     memset(&sgi, 0, sizeof(sgi));
     sgi.type = XR_TYPE_SYSTEM_GET_INFO;
     sgi.formFactor = XR_FORM_FACTOR_HEAD_MOUNTED_DISPLAY;
+    startupState(3);
     if (XR_FAILED(xrGetSystem(gInstance, &sgi, &gSystem))) return 0;
 
     // The runtime's own entry point for this is looked up rather than linked, so
@@ -189,6 +199,7 @@ static int createSession(void) {
     reqs.type = XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR;
     if (XR_FAILED(getReqs(gInstance, gSystem, &reqs))) return 0;
 
+    startupState(4);
     if (!makeContext()) return 0;
 
     XrGraphicsBindingOpenGLESAndroidKHR binding;
@@ -203,6 +214,7 @@ static int createSession(void) {
     sci.type = XR_TYPE_SESSION_CREATE_INFO;
     sci.next = &binding;
     sci.systemId = gSystem;
+    startupState(5);
     if (XR_FAILED(xrCreateSession(gInstance, &sci, &gSession))) {
         gSession = XR_NULL_HANDLE;
         return 0;
@@ -283,6 +295,7 @@ static int createSession(void) {
         info.faceCount = 1;
         info.arraySize = 1;
         info.mipCount = 1;
+        startupState(6);
         if (XR_FAILED(xrCreateSwapchain(gSession, &info, &gSwap[e]))) return 0;
         uint32_t count = 0;
         if (XR_FAILED(xrEnumerateSwapchainImages(gSwap[e], 0, &count, NULL))) return 0;
@@ -482,6 +495,7 @@ static void teardown(void) {
 
 JNIEXPORT jboolean JNICALL Java_com_vrunity_vrapk_Xr_start(JNIEnv *env, jobject thiz, jobject activity) {
     if (gInstance != XR_NULL_HANDLE) return JNI_TRUE;
+    atomic_store(&gStartupState, 1);
     gShouldQuit = 0;
     (*env)->GetJavaVM(env, &gVm);
     if (gActivity == NULL) gActivity = (*env)->NewGlobalRef(env, activity);
@@ -505,6 +519,7 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_poll(JNIEnv *env, jobject thiz,
     if (gSession == XR_NULL_HANDLE) return -1;
     if (!pollEvents() || gShouldQuit) return -1;
     if (!gRunning) {
+        startupState(7);
         usleep(4000);
         return 0;
     }
@@ -515,6 +530,7 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_poll(JNIEnv *env, jobject thiz,
     XrFrameState frameState;
     memset(&frameState, 0, sizeof(frameState));
     frameState.type = XR_TYPE_FRAME_STATE;
+    startupState(8);
     if (XR_FAILED(xrWaitFrame(gSession, &waitInfo, &frameState))) return -1;
     XrFrameBeginInfo beginInfo;
     memset(&beginInfo, 0, sizeof(beginInfo));
@@ -542,6 +558,7 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_poll(JNIEnv *env, jobject thiz,
         views[i].type = XR_TYPE_VIEW;
     }
     uint32_t viewCount = 0;
+    startupState(9);
     XrResult locateResult = xrLocateViews(gSession, &li, &vs, MAX_EYES, &viewCount, views);
     if (XR_FAILED(locateResult)) {
         LOGE("xrLocateViews failed: %d", locateResult);
@@ -570,6 +587,7 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_poll(JNIEnv *env, jobject thiz,
         memset(&wi, 0, sizeof(wi));
         wi.type = XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO;
         wi.timeout = XR_INFINITE_DURATION;
+        startupState(10);
         XrResult waitResult = xrWaitSwapchainImage(gSwap[e], &wi);
         if (XR_FAILED(waitResult)) {
             LOGE("xrWaitSwapchainImage failed for eye %d: %d", e, waitResult);
@@ -653,11 +671,17 @@ JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_endFrame(JNIEnv *env, jobject t
     if (gSession == XR_NULL_HANDLE || gAcquired < MAX_EYES) return -1;
     // OpenXR composites the most recently RELEASED image, not an acquired one.
     // Flush the eye rendering, release both images, then submit the projection.
+    startupState(11);
     glFlush();
     int released = releaseImages();
     XrResult result = endFrameWith(released);
     if (!released || XR_FAILED(result) || gShouldQuit || !gRunning) return -1;
+    startupState(12);
     return 1;
+}
+
+JNIEXPORT jint JNICALL Java_com_vrunity_vrapk_Xr_startupState(JNIEnv *env, jobject thiz) {
+    return atomic_load(&gStartupState);
 }
 
 JNIEXPORT void JNICALL Java_com_vrunity_vrapk_Xr_stop(JNIEnv *env, jobject thiz) {
