@@ -74,6 +74,15 @@ object Audio {
         }
     }
 
+    // Where a sound stands while the scene runs — an AI carries its own sound with it
+    // as it walks.
+    fun move(index: Int, x: Float, y: Float, z: Float) {
+        val s = sounds.getOrNull(index) ?: return
+        s.pos[0] = x
+        s.pos[1] = y
+        s.pos[2] = z
+    }
+
     fun stop() {
         for (s in sounds) {
             try { s.player.stop() } catch (t: Throwable) {}

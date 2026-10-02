@@ -31,6 +31,10 @@ class VrRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var height = 1
     private val player = floatArrayOf(0f, 1.6f, 0f)
     private var rigYaw = 0f
+    // How long the last drawn frame took, so the walk and the fall are the same however
+    // quickly the holder draws.
+    private var lastNs = 0L
+    private var frameDt = 0f
     private var eyeX = 0f
     private var eyeY = 0f
     private var eyeZ = 0f
@@ -149,6 +153,14 @@ class VrRenderer(private val context: Context) : GLSurfaceView.Renderer {
                 player[2] += (fz / len) * 0.7f * move
             }
         }
+        // The player is stopped by what stands in the way and stands on whatever is
+        // under them. Both eyes are then built from the same resolved spot.
+        if (eyeOffset < 0f) {
+            val stand = game.resolvePlayer(player[0], player[2], player[1] - game.eyeHeight, game.eyeHeight + 0.1f, frameDt)
+            player[0] = stand[0]
+            player[2] = stand[1]
+            player[1] = stand[2] + game.eyeHeight
+        }
         val rx = camM[0]
         val ry = camM[4]
         val rz = camM[8]
@@ -165,6 +177,10 @@ class VrRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
     override fun onDrawFrame(gl: GL10?) {
         val half = width / 2
+        val now = System.nanoTime()
+        frameDt = if (lastNs == 0L) 0f else (now - lastNs) / 1000000000f
+        lastNs = now
+        if (frameDt > 0.1f) frameDt = 0.1f
         // The scene moves forward once per frame, with the eye as the ear that hears
         // it. The view still holds the last frame's, which is where the head was a
         // moment ago.

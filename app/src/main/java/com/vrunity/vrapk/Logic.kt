@@ -30,6 +30,11 @@ interface LogicWorld {
     fun playSound(index: Int, play: Boolean)
     fun teleportTo(x: Float, y: Float, z: Float)
     fun worldChanged()
+    // The AI: turning one on or off, sending it after the player, or retuning it while
+    // the scene runs.
+    fun aiOn(index: Int, on: Boolean)
+    fun aiSpot(index: Int)
+    fun aiSet(index: Int, kind: Int, value: Float)
 }
 
 // The scene's logic, stepped once per frame with the player's head where it is.
@@ -78,6 +83,13 @@ class Logic(private val scene: Scene, private val world: LogicWorld) {
             "rot" -> world.applyTransform(a.i, 1, a.v)
             "scale" -> world.applyTransform(a.i, 2, a.v)
             "sound" -> world.playSound(a.i, a.f > 0.5f)
+            "aiOn" -> world.aiOn(a.i, a.f > 0.5f)
+            "aiSpot" -> world.aiSpot(a.i)
+            "aiDetect" -> world.aiSet(a.i, 0, a.f)
+            "aiFov" -> world.aiSet(a.i, 1, a.f)
+            "aiRoamSpeed" -> world.aiSet(a.i, 2, a.f)
+            "aiChaseSpeed" -> world.aiSet(a.i, 3, a.f)
+            "aiTurn" -> world.aiSet(a.i, 4, a.f)
             "teleport" -> world.teleportTo(a.v[0], a.v[1], a.v[2])
             "delay" -> {
                 val delay = scene.delays.getOrNull(a.i)

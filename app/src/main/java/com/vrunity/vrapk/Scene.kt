@@ -52,6 +52,9 @@ class Scene private constructor() {
     // delays that count down, each carrying the actions it runs.
     val triggers = ArrayList<Trigger>()
     val delays = ArrayList<Delay>()
+    // What the player and the AI are stopped by, and the AI the scene runs.
+    val solids = ArrayList<Solid>()
+    val ais = ArrayList<Ai>()
 
     // A surface to draw: either one of the device's own shapes, or a model baked
     // from the scene (an imported model, 3D text, a model attached to an object),
@@ -109,6 +112,8 @@ class Scene private constructor() {
             readLights(root, scene)
             readFog(root, scene)
             readSounds(root, scene)
+            readSolids(root, scene)
+            readAi(root, scene)
             val list = root.optJSONArray("objects") ?: return scene
             for (i in 0 until list.length()) {
                 val o = list.optJSONObject(i) ?: continue
@@ -173,6 +178,57 @@ class Scene private constructor() {
                 a.optDouble("speed", 1.0).toFloat(),
                 a.optBoolean("loop", true),
                 values)
+        }
+
+        // What stands in the way: the scene's own shapes and models, each reduced by
+        // the build to a box, a ball, a pillar or a floor.
+        private fun readSolids(root: JSONObject, scene: Scene) {
+            val list = root.optJSONArray("solids") ?: return
+            for (i in 0 until list.length()) {
+                val s = list.optJSONObject(i) ?: continue
+                scene.solids.add(Solid(
+                    s.optInt("kind", 0),
+                    s.optDouble("x", 0.0).toFloat(),
+                    s.optDouble("y", 0.0).toFloat(),
+                    s.optDouble("z", 0.0).toFloat(),
+                    s.optDouble("hx", 0.5).toFloat(),
+                    s.optDouble("hy", 0.5).toFloat(),
+                    s.optDouble("hz", 0.5).toFloat(),
+                    s.optDouble("r", 0.5).toFloat(),
+                    s.optDouble("yaw", 0.0).toFloat()))
+            }
+        }
+
+        // Every AI the scene runs: the object it drives, where it stands, how it
+        // behaves, and the sounds it makes in each of its states.
+        private fun readAi(root: JSONObject, scene: Scene) {
+            val list = root.optJSONArray("ai") ?: return
+            for (i in 0 until list.length()) {
+                val a = list.optJSONObject(i) ?: continue
+                val item = a.optInt("item", -1)
+                if (item < 0) continue
+                val face = a.optDouble("face", 0.0).toFloat()
+                val ai = Ai(
+                    item,
+                    a.optDouble("x", 0.0).toFloat(),
+                    a.optDouble("y", 0.0).toFloat(),
+                    a.optDouble("z", 0.0).toFloat(),
+                    face,
+                    a.optDouble("restFace", face.toDouble()).toFloat(),
+                    a.optDouble("height", 1.0).toFloat(),
+                    a.optDouble("radius", 0.4).toFloat(),
+                    a.optDouble("front", 0.0).toFloat(),
+                    a.optDouble("turn", 15.0).toFloat(),
+                    a.optDouble("detect", 12.0).toFloat(),
+                    a.optDouble("fov", 100.0).toFloat(),
+                    a.optDouble("roamSpeed", 2.0).toFloat(),
+                    a.optDouble("chaseSpeed", 4.0).toFloat(),
+                    a.optBoolean("roam", true),
+                    a.optInt("roamSound", -1),
+                    a.optInt("chaseSound", -1))
+                ai.on = a.optBoolean("on", true)
+                scene.ais.add(ai)
+            }
         }
 
         private fun readSounds(root: JSONObject, scene: Scene) {

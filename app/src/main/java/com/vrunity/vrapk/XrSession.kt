@@ -88,7 +88,7 @@ class XrSession(private val activity: Activity) {
             if (dt > 0.1f) dt = 0.1f
             Xr.input(stick)
             steer(dt)
-            drawEyes(game)
+            drawEyes(game, dt)
             check(Xr.endFrame() >= 0) { "The headset rejected the VR frame." }
             submitted++
         }
@@ -159,7 +159,7 @@ class XrSession(private val activity: Activity) {
         GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
     }
 
-    private fun drawEyes(game: Game) {
+    private fun drawEyes(game: Game, dt: Float) {
         val w = Xr.eyeWidth()
         val h = Xr.eyeHeight()
         check(w > 0 && h > 0) { "The headset returned invalid eye dimensions." }
@@ -177,6 +177,12 @@ class XrSession(private val activity: Activity) {
             playerY = teleport[1] + (if (Xr.floorSpace()) 0f else game.eyeHeight)
             playerZ = teleport[2]
         }
+        // The player walks the scene: stopped by what stands in the way, standing on
+        // whatever is under them, falling when they step off an edge.
+        val stand = game.resolvePlayer(playerX, playerZ, playerY, game.eyeHeight + 0.1f, dt)
+        playerX = stand[0]
+        playerZ = stand[1]
+        playerY = stand[2]
         // A pose that is not a number would make the frustum degenerate and hide the
         // whole scene, so it is replaced with a sane view instead.
         for (i in 0 until 22) {

@@ -13,6 +13,9 @@ class Game(context: Context) : LogicWorld {
     // The scene's own logic: the zones the player walks through and the delays that
     // count down.
     private val logic = Logic(scene, this)
+    // The AI the scene runs: it walks its own objects across the same surfaces the
+    // player is stopped by.
+    private val ai = AiSystem(scene)
     private val shapes = HashMap<String, Mesh>()
     // The models and images the scene came with, loaded once at start-up.
     private val models = HashMap<String, BakedModel>()
@@ -217,6 +220,9 @@ class Game(context: Context) : LogicWorld {
         // The scene's logic — the zones the player walks through and the delays that
         // count down — stepped with the player's head where it is.
         logic.step(dt, listenerX, listenerY, listenerZ)
+        // The AI runs after the scene's own logic, so a trigger that turns one on or
+        // sends it after the player takes effect the moment it fires.
+        ai.step(dt, listenerX, listenerY, listenerZ)
         val teleport = pendingTeleport
         pendingTeleport = null
         return teleport
@@ -306,6 +312,44 @@ class Game(context: Context) : LogicWorld {
 
     override fun worldChanged() {
         applyWorld()
+    }
+
+    // The AI a trigger acts on while the scene runs.
+    override fun aiOn(index: Int, on: Boolean) {
+        ai.active(index, on)
+    }
+
+    override fun aiSpot(index: Int) {
+        ai.spot(index)
+    }
+
+    override fun aiSet(index: Int, kind: Int, value: Float) {
+        ai.tune(index, kind, value)
+    }
+
+    // Where the player ends up: stopped by what stands in the way, standing on
+    // whatever is under them — the scene's own shapes, or its floor. A small step up
+    // is taken, a drop is fallen.
+    private var fallVel = 0f
+
+    fun resolvePlayer(x: Float, z: Float, platformY: Float, body: Float, dt: Float): FloatArray {
+        val pushed = Collide.push(scene.solids, x, z, platformY + 0.05f, platformY + body, 0.32f)
+        val ground = Collide.ground(scene.solids, pushed[0], pushed[1], platformY + 0.55f)
+        var y = platformY
+        if (ground > y) {
+            y = ground
+            fallVel = 0f
+        } else if (ground < y - 0.02f) {
+            fallVel -= 9.8f * dt
+            y += fallVel * dt
+            if (y <= ground) {
+                y = ground
+                fallVel = 0f
+            }
+        } else {
+            fallVel = 0f
+        }
+        return floatArrayOf(pushed[0], pushed[1], y)
     }
 
     fun clear() {
