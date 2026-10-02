@@ -58,6 +58,17 @@ static XrResult startupResult(XrResult result) {
     return result;
 }
 
+// A failed step is recorded by name, so the reason shown on the headset says
+// exactly which runtime call refused instead of only which stage it reached.
+static _Atomic(const char *) gXrStep = NULL;
+
+static int xrFailure(const char *step, XrResult result) {
+    atomic_store(&gXrStep, step);
+    startupResult(result);
+    LOGE("OpenXR startup step failed: %s (%d)", step, (int)result);
+    return 0;
+}
+
 // Only startup is monitored. A first successful submission permanently disarms
 // the activity watchdog; this lock-free read is safe even if the XR thread blocks.
 static void startupState(int state) {
@@ -229,8 +240,9 @@ static int createSession(void) {
     // the build never depends on it being exported.
     typedef XrResult (XRAPI_PTR *PFN_getGlesReqs)(XrInstance, XrSystemId, XrGraphicsRequirementsOpenGLESKHR *);
     PFN_getGlesReqs getReqs = NULL;
-    if (XR_FAILED(xrGetInstanceProcAddr(gInstance, "xrGetOpenGLESGraphicsRequirementsKHR", (PFN_xrVoidFunction *)(&getReqs)))) return 0;
-    if (getReqs == NULL) return 0;
+    XrResult procResult = xrGetInstanceProcAddr(gInstance, "xrGetOpenGLESGraphicsRequirementsKHR", (PFN_xrVoidFunction *)(&getReqs));
+    if (XR_FAILED(procResult)) return xrFailure("xrGetOpenGLESGraphicsRequirementsKHR", procResult);
+    if (getReqs == NULL) return xrFailure("OpenGL ES support", XR_ERROR_EXTENSION_NOT_PRESENT);
     XrGraphicsRequirementsOpenGLESKHR reqs;
     memset(&reqs, 0, sizeof(reqs));
     reqs.type = XR_TYPE_GRAPHICS_REQUIREMENTS_OPENGL_ES_KHR;
@@ -251,11 +263,22 @@ static int createSession(void) {
     sci.type = XR_TYPE_SESSION_CREATE_INFO;
     sci.next = &binding;
     sci.systemId = gSystem;
-    startupState(5);
-    if (XR_FAILED(startupResult(xrCreateSession(gInstance, &sci, &gSession)))) {
+    // A headset runtime can refuse the first request while it is still waking up.
+    // Asking again a moment later turns that into a launch instead of an error
+    // screen, so the request is repeated before it is treated as fatal.
+    XrResult sessionResult = XR_ERROR_RUNTIME_FAILURE;
+    for (int attempt = 0; attempt < 4; attempt++) {
+        startupState(5);
+        sessionResult = startupResult(xrCreateSession(gInstance, &sci, &gSession));
+        if (XR_SUCCEEDED(sessionResult)) {
+            atomic_store(&gStartupError, 0);
+            break;
+        }
+        LOGE("xrCreateSession attempt %d failed: %d", attempt + 1, (int)sessionResult);
         gSession = XR_NULL_HANDLE;
-        return 0;
+        usleep(400000);
     }
+    if (XR_FAILED(sessionResult)) return xrFailure("xrCreateSession", sessionResult);
 
     // Floor-relative space, so the player's real height is used as it is.
     XrReferenceSpaceCreateInfo rci;
@@ -267,14 +290,17 @@ static int createSession(void) {
         gFloorSpace = 1;
     } else {
         rci.referenceSpaceType = XR_REFERENCE_SPACE_TYPE_LOCAL;
-        if (XR_FAILED(xrCreateReferenceSpace(gSession, &rci, &gSpace))) return 0;
+        if (XR_FAILED(xrCreateReferenceSpace(gSession, &rci, &gSpace))) return xrFailure("xrCreateReferenceSpace", XR_ERROR_INITIALIZATION_FAILED);
     }
 
+    startupState(15);
     uint32_t cfgCount = 0;
-    if (XR_FAILED(xrEnumerateViewConfigurations(gInstance, gSystem, 0, &cfgCount, NULL))) return 0;
+    XrResult cfgResult = xrEnumerateViewConfigurations(gInstance, gSystem, 0, &cfgCount, NULL);
+    if (XR_FAILED(cfgResult)) return xrFailure("xrEnumerateViewConfigurations", cfgResult);
     if (cfgCount > 8) cfgCount = 8;
     XrViewConfigurationType cfgs[8];
-    if (XR_FAILED(xrEnumerateViewConfigurations(gInstance, gSystem, cfgCount, &cfgCount, cfgs))) return 0;
+    cfgResult = xrEnumerateViewConfigurations(gInstance, gSystem, cfgCount, &cfgCount, cfgs);
+    if (XR_FAILED(cfgResult)) return xrFailure("xrEnumerateViewConfigurations", cfgResult);
     gViewConfig = cfgs[0];
     for (uint32_t i = 0; i < cfgCount; i++) {
         if (cfgs[i] == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO) gViewConfig = cfgs[i];
@@ -297,24 +323,29 @@ static int createSession(void) {
         memset(&views[i], 0, sizeof(views[i]));
         views[i].type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
     }
+    startupState(16);
     uint32_t viewCount = 0;
-    if (XR_FAILED(xrEnumerateViewConfigurationViews(gInstance, gSystem, gViewConfig, MAX_EYES, &viewCount, views))) return 0;
-    if (viewCount < MAX_EYES) return 0;
+    XrResult viewResult = xrEnumerateViewConfigurationViews(gInstance, gSystem, gViewConfig, MAX_EYES, &viewCount, views);
+    if (XR_FAILED(viewResult)) return xrFailure("xrEnumerateViewConfigurationViews", viewResult);
+    if (viewCount < MAX_EYES) return xrFailure("Headset eye views", XR_ERROR_INITIALIZATION_FAILED);
     gSwapW = (int32_t)views[0].recommendedImageRectWidth;
     gSwapH = (int32_t)views[0].recommendedImageRectHeight;
-    if (gSwapW < 1 || gSwapH < 1) return 0;
+    if (gSwapW < 1 || gSwapH < 1) return xrFailure("Headset eye size", XR_ERROR_INITIALIZATION_FAILED);
 
     // The eye images are drawn into and then handed to the compositor, never sampled
     // by a shader, so a colour attachment is all the runtime is asked for. The format
     // comes from what this runtime actually offers: a hard-coded format a headset does
     // not support fails xrCreateSwapchain, and a session that never opens is exactly
     // what leaves the headset sitting on its loading screen.
+    startupState(17);
     uint32_t fmtCount = 0;
-    if (XR_FAILED(xrEnumerateSwapchainFormats(gSession, 0, &fmtCount, NULL))) return 0;
-    if (fmtCount == 0) return 0;
+    XrResult fmtResult = xrEnumerateSwapchainFormats(gSession, 0, &fmtCount, NULL);
+    if (XR_FAILED(fmtResult)) return xrFailure("xrEnumerateSwapchainFormats", fmtResult);
+    if (fmtCount == 0) return xrFailure("Eye image formats", XR_ERROR_INITIALIZATION_FAILED);
     if (fmtCount > 32) fmtCount = 32;
     int64_t formats[32];
-    if (XR_FAILED(xrEnumerateSwapchainFormats(gSession, fmtCount, &fmtCount, formats))) return 0;
+    fmtResult = xrEnumerateSwapchainFormats(gSession, fmtCount, &fmtCount, formats);
+    if (XR_FAILED(fmtResult)) return xrFailure("xrEnumerateSwapchainFormats", fmtResult);
     int64_t swapFormat = formats[0];
     for (uint32_t i = 0; i < fmtCount; i++) {
         if (formats[i] == GL_RGBA8) { swapFormat = formats[i]; break; }
@@ -534,6 +565,7 @@ JNIEXPORT jboolean JNICALL Java_com_vrunity_vrapk_Xr_start(JNIEnv *env, jobject 
     if (gInstance != XR_NULL_HANDLE) return JNI_TRUE;
     atomic_store(&gStartupState, 1);
     atomic_store(&gStartupError, 0);
+    atomic_store(&gXrStep, NULL);
     gShouldQuit = 0;
     (*env)->GetJavaVM(env, &gVm);
     if (gActivity == NULL) gActivity = (*env)->NewGlobalRef(env, activity);
@@ -735,16 +767,21 @@ JNIEXPORT jstring JNICALL Java_com_vrunity_vrapk_Xr_startupDetail(JNIEnv *env, j
         "Opening headset session", "Creating eye swapchains", "Waiting for session READY",
         "Waiting for first headset frame", "Waiting for valid tracking",
         "Waiting for eye image", "Submitting first VR frame", "VR running",
-        "Reading scene", "Uploading geometry and compiling shaders"
+        "Reading scene", "Uploading geometry and compiling shaders",
+        "Reading the headset's view setup", "Reading the headset's eye views",
+        "Choosing an eye image format"
     };
     int state = atomic_load(&gStartupState);
     int error = atomic_load(&gStartupError);
     char detail[256];
-    const char *stage = state >= 0 && state <= 14 ? stages[state] : "Unknown startup stage";
+    const char *stage = state >= 0 && state <= 17 ? stages[state] : "Unknown startup stage";
     const char *graphicsStep = atomic_load(&gGraphicsStep);
     int graphicsError = atomic_load(&gGraphicsError);
+    const char *xrStep = atomic_load(&gXrStep);
     if (graphicsStep && graphicsError != EGL_SUCCESS) snprintf(detail, sizeof(detail), "%s: %s (EGL 0x%x)", stage, graphicsStep, graphicsError);
     else if (graphicsStep) snprintf(detail, sizeof(detail), "%s: %s", stage, graphicsStep);
+    else if (xrStep && error) snprintf(detail, sizeof(detail), "%s: %s (OpenXR error %d)", stage, xrStep, error);
+    else if (xrStep) snprintf(detail, sizeof(detail), "%s: %s", stage, xrStep);
     else if (error) snprintf(detail, sizeof(detail), "%s (OpenXR error %d)", stage, error);
     else snprintf(detail, sizeof(detail), "%s", stage);
     return (*env)->NewStringUTF(env, detail);

@@ -1,6 +1,7 @@
 package com.vrunity.vrapk
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -30,6 +31,20 @@ class VrStartupErrorActivity : Activity() {
         message.textSize = 16f
         message.setPadding(0, 24, 0, 24)
         root.addView(message)
+        // A runtime that refused the session while it was still waking up can
+        // usually start normally on a second try, so this is offered first.
+        val retry = Button(this)
+        retry.text = "Try again"
+        retry.setOnClickListener {
+            val launch = packageManager.getLaunchIntentForPackage(packageName)
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+                startActivity(launch)
+            }
+            finishAffinity()
+            Handler(Looper.getMainLooper()).postDelayed({ Process.killProcess(Process.myPid()) }, 300L)
+        }
+        root.addView(retry)
         val close = Button(this)
         close.text = "Close"
         close.setOnClickListener {
