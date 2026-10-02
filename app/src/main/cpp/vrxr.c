@@ -342,14 +342,22 @@ static int createSession(void) {
     XrResult fmtResult = xrEnumerateSwapchainFormats(gSession, 0, &fmtCount, NULL);
     if (XR_FAILED(fmtResult)) return xrFailure("xrEnumerateSwapchainFormats", fmtResult);
     if (fmtCount == 0) return xrFailure("Eye image formats", XR_ERROR_INITIALIZATION_FAILED);
-    if (fmtCount > 32) fmtCount = 32;
-    int64_t formats[32];
-    fmtResult = xrEnumerateSwapchainFormats(gSession, fmtCount, &fmtCount, formats);
-    if (XR_FAILED(fmtResult)) return xrFailure("xrEnumerateSwapchainFormats", fmtResult);
+    // OpenXR requires room for EVERY format reported by the count query.
+    // Quest can expose more than 32; truncating that count returns error -11
+    // (XR_ERROR_SIZE_INSUFFICIENT), even though the session opened successfully.
+    const uint32_t fmtCapacity = fmtCount;
+    int64_t *formats = calloc(fmtCapacity, sizeof(*formats));
+    if (formats == NULL) return xrFailure("Eye image format allocation", XR_ERROR_OUT_OF_MEMORY);
+    fmtResult = xrEnumerateSwapchainFormats(gSession, fmtCapacity, &fmtCount, formats);
+    if (XR_FAILED(fmtResult)) {
+        free(formats);
+        return xrFailure("xrEnumerateSwapchainFormats", fmtResult);
+    }
     int64_t swapFormat = formats[0];
     for (uint32_t i = 0; i < fmtCount; i++) {
         if (formats[i] == GL_RGBA8) { swapFormat = formats[i]; break; }
     }
+    free(formats);
 
     for (int e = 0; e < MAX_EYES; e++) {
         XrSwapchainCreateInfo info;
